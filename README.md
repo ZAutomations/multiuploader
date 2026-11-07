@@ -1,22 +1,49 @@
-# Multi-channel Video Uploader
+# Multi-channel Video Library — v2
 
-Upload one video to every enabled destination before moving to the next video. Based on the existing TikTok/YouTube GUI with per-channel metadata, playlists, scheduling, Google Sheets and a shared video source (first enabled channel).
+One permanent library of videos/thumbnails, one master Videos tab, one output tab per YouTube channel, and local SQLite upload history. No repeated copies and no moving media after upload.
 
-## Install on Windows
+## Install / start
 
-1. Clone/download this repo into the folder/drive where you want the tool to live.
-2. Run `setup\setup.bat`. Install Python 3.10+ with pip and Tcl/Tk from python.org if prompted, then rerun setup.
-3. Setup creates `.venv` inside this folder and reuses compatible system packages. Already-satisfied dependencies are skipped; it does not force upgrades.
-4. Run `RUN.bat`. Configure your own channel credentials, Sheets URL, video source and uploaded folder in the GUI.
+Run `setup\setup.bat`, then `RUN.bat`. Python 3.10+ is required. Setup creates a local `.venv`, reuses compatible installed dependencies and installs only missing requirements. After moving this app to another drive/PC, rerun setup. Configure credentials and source paths for that PC.
 
-No fixed drive letter or admin installation is required. To use another drive/PC, copy the app there and rerun `setup\setup.bat`. A copied virtual environment is recreated for its new location; the old environment is preserved. Existing channel settings are retained: update any video/credentials paths that do not exist on the new PC. Python and account access must be available on that PC. Setup needs internet for missing dependencies; it reports failure if installation cannot finish.
+## Upgrade from the previous uploader
 
-Put OAuth client JSONs and your Sheets `service_account.json` in `youtube_credentials`. Authenticate each YouTube channel yourself. Private configuration, passwords, tokens, credentials, downloaded media, backups and upload state are excluded from Git. A fresh clone has no configured channels or account access. Copy these private files separately only when you intend to reuse your own accounts/history.
+1. Stop the old window and reopen RUN.bat.
+2. The first run migrates `broadcast_state.json` into `library.sqlite3` automatically. Successful uploads and uncertain attempts are preserved per channel; the old JSON remains as an export for recovery.
+3. Set the shared Library folder. The optional Previous Uploaded folder is also indexed, without moving its files back or duplicating them. Your current files can stay in FernStyle and FernStyle/Uploaded.
+4. Enable Google Sheets through the original source-channel settings (sheet-free mode must be off), and keep your spreadsheet URL configured.
+5. Use **Sync library / Sheets (no video uploads)** before starting uploads. It discovers local files, imports title/description metadata from existing configured source tabs, and populates the new master/output tabs. Existing legacy tabs such as Multi remain untouched.
+6. Start Automation or Process Selected Channels. Every video is processed across the selected destinations before moving to the next video. Its media files remain permanently available.
 
-## Shared source and Sheets
+## Excel / Google Sheets template
 
-The first enabled channel supplies the shared source folder or TikTok username. In local Sheet mode, column A is the exact video filename without its extension, e.g. `My Video` matches `My Video.mp4`. Existing rows supply metadata and are updated after the uploads; no generated hash IDs are written into the Sheet. Channels sharing the same worksheet get all their YouTube links/IDs retained in that row. Sheet-free folder mode does not require Sheets.
+`templates/MultiUploader_Template.xlsx` contains the exact header schema plus instructions and current channel tab names. Import it as Google Sheets, or copy the tabs. Keep row 1 headers and tab names exactly. Delete the Sample Video example row before production. You can also let **Sync library / Sheets** create and populate the tabs automatically in your existing spreadsheet.
 
-Place one matching `My Video.jpg`, `.jpeg` or `.png` beside the video to automatically set it as the thumbnail on every destination. Video processing must finish first. Failed thumbnails can be retried without reuploading the video. Once complete, the video and matching image move to Uploaded. Uploaded can be a subfolder of Source.
+**Videos** columns: `video_id`, `filename`, `title`, `description`, `thumbnail`, `source_url`.
 
-Local state records successful channel uploads. An uncertain upload requires checking YouTube before retrying. Keep the private state when moving an existing workflow to avoid repeat uploads. Network failures and thumbnail permissions can still require user attention.
+- `video_id` is the filename without extension, e.g. My Video for My Video.mp4.
+- Edit the master title and description to control metadata. Thumbnail detection uses the same-name PNG/JPG/JPEG next to the actual video file. Keep only one matching thumbnail.
+- Local discovery automatically adds files not yet in Videos. Different videos must not share the same filename stem.
+- Internal content hashes recognize identical video data; hashes are never used as Sheet video IDs.
+
+Channel tabs are generated as `Uploads - <short channel name> - <channel ID suffix>`. Names fit both Excel and Google Sheets. The stable tab mapping is stored in SQLite. Each tab has these columns:
+
+`video_id`, `filename`, `title`, `description`, `thumbnail`, `yt_video_url`, `youtube_id`, `upload_time`, `schedual_time`, `status`, `thumbnail_status`, `error`.
+
+Output tabs are mirrors, not the authority for deciding which videos to upload. Editing an uploaded/status cell will not reset a real upload. SQLite saves success before attempting Sheet sync; if Sheets fails, later runs synchronize the existing results without re-uploading videos. Keep a working private database to avoid duplicates. Only history attributable to known channel IDs in the legacy JSON migrates automatically; shared cells alone cannot reliably prove channel ownership.
+
+## Adding channels
+
+On the first library run for a new destination, choose **Yes** to include every existing/future video, **No** to accept only files discovered after that initial scan, or Cancel to stop. Existing channels with migrated history include the existing library and skip their successful uploads. Use **Include existing videos for selected channels** to change a future-only channel to backfill later. Video upload and thumbnail completion are tracked separately for every channel.
+
+## Thumbnail behavior
+
+Same-name PNG/JPG/JPEG thumbnails are set after YouTube processing. Oversized images are compressed in memory below the installed client limit; originals stay unchanged. Thumbnail errors are recorded but do not block subsequent destinations/videos. Later runs retry missing thumbnails without uploading videos again.
+
+## Source modes / safety
+
+The first enabled channel supplies TikTok username and sheet-free setting. The shared Library folder can be changed independently in the new library controls. TikTok downloads are staged locally and use this same permanent-library workflow. Phase 1 / Sync indexes and syncs without video uploads; Phase 2/Both run the upload queue. Select Single to process one video needing uploads, or continuous/all for all pending videos. Quota-blocked or uncertain destinations are left pending; other destinations continue. Review uncertain results against YouTube before allowing retries.
+
+## Private files / backups
+
+The repository excludes `.app_password`, OAuth tokens, `youtube_credentials`, private channel/config JSON, `library.sqlite3` and its WAL/SHM files, legacy history and backups. For another PC, stop the app first, then transfer your private credentials/config/history/database separately. A fresh clone has no accounts or prior upload history. Back up the database while the app is closed; do not delete it just to resolve an error.

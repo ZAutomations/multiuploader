@@ -22,3 +22,7 @@ tiktok_queue/
 tiktok_uploaded/
 downloads/
 *.log
+
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

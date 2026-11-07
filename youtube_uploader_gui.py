@@ -10,6 +10,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from tiktok_youtube_gui import TikTokYouTubeGUI
 from broadcast_queue import BroadcastQueue
+from library_store import LibraryStore
 
 BASE = Path(__file__).resolve().parent
 
@@ -23,23 +24,58 @@ class BroadcastGUI(TikTokYouTubeGUI):
         self._one_video = False
         settings = BASE / 'broadcast_config.json'
         self.broadcast_config = json.loads(settings.read_text(encoding='utf-8-sig')) if settings.exists() else {}
-        self.source_var = tk.StringVar()
-        self.uploaded_var = tk.StringVar()
+        self.source_var = tk.StringVar(value=self.broadcast_config.get('source',''))
+        self.uploaded_var = tk.StringVar(value=self.broadcast_config.get('uploaded',''))
         self.tiktok_var = tk.StringVar()
         self.use_sheets_var = tk.BooleanVar(value=True)
+        library = tk.LabelFrame(parent, text='Permanent shared library')
+        library.pack(fill='x', pady=5)
+        tk.Label(library, text='Videos stay here. Master tab: Videos. Upload history: library.sqlite3', wraplength=430).pack(anchor='w')
+        for label,variable in [('Library folder',self.source_var),('Previous Uploaded folder (optional)',self.uploaded_var)]:
+            row=tk.Frame(library);row.pack(fill='x',pady=3)
+            tk.Label(row,text=label).pack(anchor='w')
+            tk.Entry(row,textvariable=variable).pack(side='left',fill='x',expand=True)
+            tk.Button(row,text='Browse',command=lambda v=variable:self.browse_folder(v)).pack(side='right')
+        tk.Button(library,text='Sync library / Sheets (no video uploads)',command=self.sync_library_only).pack(fill='x')
+        tk.Button(library,text='Include existing videos for selected channels',command=self.include_existing).pack(fill='x')
+        self.ingest_requested=False
+
+    def include_existing(self):
+        if self.is_running:return
+        from tiktok_youtube_gui import ChannelSelectionDialog
+        result=ChannelSelectionDialog(self.root,self.channels_config).show()
+        if not result:return
+        store=LibraryStore(BASE/'library.sqlite3',BASE/'broadcast_state.json')
+        for key in result['channels']:
+            c=self.channels_config[key]
+            identity=c.get('youtube_channel_id') or c.get('channel_id') or key
+            store.register(identity,c.get('channel_name',identity),'all')
+            store.sync_policy(identity,'all')
+        self.log('Selected channels now include all existing library videos. Successful uploads will still be skipped.')
+
+    def refresh_all_data(self):
+        store=LibraryStore(BASE/'library.sqlite3',BASE/'broadcast_state.json')
+        with store.connect() as db:
+            videos=db.execute('SELECT COUNT(*) FROM videos').fetchone()[0]
+            uploads=db.execute("SELECT COUNT(*) FROM uploads WHERE status='success'").fetchone()[0]
+        self.stat_labels['Videos'].config(text=str(videos))
+        self.stat_labels['Uploaded'].config(text=str(uploads))
+        self.stat_labels['Channels'].config(text=str(sum(bool(c.get('enabled',True)) for c in self.channels_config.values())))
+        self.refresh_channels()
+        self.log(f'Library: {videos} unique videos; {uploads} successful channel uploads')
+
+    def sync_library_only(self):
+        self.ingest_requested=True
+        self.start_automation()
 
     def sync_shared_source(self):
-        enabled = [c for c in self.channels_config.values() if c.get('enabled', True)]
-        if not enabled:
-            raise ValueError('Enable at least one channel')
-        shared = enabled[0]
-        # Source settings use the first enabled channel, just as configured in
-        # the original channel editor. Every destination receives that source.
-        local = shared.get('source_type', 'tiktok') == 'local_folder'
-        self.source_var.set(shared.get('video_source_folder', '') if local else '')
-        self.uploaded_var.set(shared.get('video_uploaded_folder', '') if local else '')
-        self.tiktok_var.set('' if local else shared.get('tiktok_username', ''))
-        self.use_sheets_var.set(not shared.get('sheet_free_mode', False))
+        enabled=[c for c in self.channels_config.values() if c.get('enabled',True)]
+        if not enabled: raise ValueError('Enable at least one channel')
+        shared=enabled[0]
+        self.tiktok_var.set(shared.get('tiktok_username','') if shared.get('source_type')=='tiktok' else '')
+        if not self.source_var.get():self.source_var.set(shared.get('video_source_folder',''))
+        if not self.uploaded_var.get():self.uploaded_var.set(shared.get('video_uploaded_folder',''))
+        self.use_sheets_var.set(not shared.get('sheet_free_mode',False))
 
     def process_selected_channels(self):
         from tiktok_youtube_gui import ChannelSelectionDialog
@@ -92,7 +128,8 @@ class BroadcastGUI(TikTokYouTubeGUI):
         if self.is_running:
             return
         path = BASE / 'broadcast_state.json'
-        state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        store=LibraryStore(BASE / 'library.sqlite3',path)
+        state=store.load_state()
         for entry in state.values():
             for identity in list(entry['pending']):
                 answer = messagebox.askyesnocancel('Check YouTube first', f"{entry['filename']}\nChannel: {identity}\n\nIs this video already uploaded?\nYes: enter YouTube video ID.\nNo: allow a fresh retry.\nCancel: leave unresolved.")
@@ -106,6 +143,7 @@ class BroadcastGUI(TikTokYouTubeGUI):
                     video_id = video_id.strip()
                     entry['success'][identity] = {'youtube_id': video_id, 'youtube_url': f'https://www.youtube.com/watch?v={video_id}'}
                 del entry['pending'][identity]
+        store.save_state(state)
         temp = path.with_suffix('.tmp')
         temp.write_text(json.dumps(state, indent=2), encoding='utf-8')
         temp.replace(path)
@@ -166,8 +204,9 @@ class BroadcastGUI(TikTokYouTubeGUI):
                 source = str(BASE / 'tiktok_queue' / username)
                 uploaded = str(BASE / 'tiktok_uploaded' / username)
                 Path(source).mkdir(parents=True, exist_ok=True)
-            if not source or not uploaded:
-                raise ValueError('Choose both folders')
+            if not source:
+                raise ValueError('Choose the shared library folder')
+            if not uploaded:uploaded=source
             src, dst = Path(source).resolve(), Path(uploaded).resolve()
             if not src.is_dir():
                 raise ValueError('Source folder does not exist')
@@ -177,6 +216,17 @@ class BroadcastGUI(TikTokYouTubeGUI):
         except ValueError as error:
             messagebox.showerror('Settings', str(error))
             return
+        store=LibraryStore(BASE / 'library.sqlite3', BASE / 'broadcast_state.json')
+        for key,c in channels.items():
+            identity=c.get('youtube_channel_id') or c.get('channel_id') or key
+            if not store.known(identity):
+                history=store.load_state()
+                if any(identity in e['success'] or identity in e['pending'] for e in history.values()):
+                    c['library_policy']='all'
+                else:
+                    answer=messagebox.askyesnocancel('New channel library', f"{c.get('channel_name',identity)}: upload existing library videos?\nYes: all existing and future videos.\nNo: only files first discovered after this library run.\nCancel: do not start.")
+                    if answer is None:return
+                    c['library_policy']='all' if answer else 'future'
         self.review_pending()
         username = self.tiktok_var.get().strip().lstrip('@')
         use_sheets = self.use_sheets_var.get()
@@ -206,6 +256,8 @@ class BroadcastGUI(TikTokYouTubeGUI):
         self.btn_start.config(state='disabled')
         self.btn_stop.config(state='normal')
         phase_mode = self.phase_mode.get()
+        ingest_only=self.ingest_requested or phase_mode=='phase1'
+        self.ingest_requested=False
         def worker():
             try:
                 import contextlib
@@ -217,17 +269,6 @@ class BroadcastGUI(TikTokYouTubeGUI):
                     def flush(stream):
                         pass
                 metadata = {}
-                if username and phase_mode in ('phase1', 'both'):
-                    for channel in channels.values():
-                        shared_channel = dict(channel, source_type='tiktok', tiktok_username=username)
-                        self.uploader.phase1_completed_channels.clear()
-                        with contextlib.redirect_stdout(LogStream()):
-                            self.uploader.process_channel(shared_channel, phase_mode='phase1')
-                    if phase_mode == 'phase1':
-                        return
-                if not username and phase_mode == 'phase1':
-                    self.log('Phase 1 applies to TikTok fetching. Local source uses Phase 2.')
-                    return
                 if username:
                     self.prepare_tiktok(source, uploaded, username)
                     index_path = BASE / 'tiktok_downloads.json'
@@ -235,7 +276,7 @@ class BroadcastGUI(TikTokYouTubeGUI):
                         index = json.loads(index_path.read_text(encoding='utf-8'))
                         metadata = {f'tiktok_{key}.mp4': value.get('info', {}) for key, value in index.items() if isinstance(value, dict)}
                 with contextlib.redirect_stdout(LogStream()):
-                    BroadcastQueue(self.uploader, BASE / 'broadcast_state.json', self.log, self.broadcast_stop).run(source, uploaded, channels, delay, use_sheets=use_sheets, metadata=metadata, max_videos=1 if self._one_video else None)
+                    BroadcastQueue(self.uploader, BASE / 'broadcast_state.json', self.log, self.broadcast_stop).run(source, uploaded, channels, delay, use_sheets=use_sheets, metadata=metadata, max_videos=1 if self._one_video else None, ingest_only=ingest_only)
             except Exception as error:
                 self.log(f'Queue stopped: {error}', 'error')
             finally:
@@ -258,6 +299,7 @@ class BroadcastGUI(TikTokYouTubeGUI):
         self.btn_start.config(state='normal')
         self.btn_stop.config(state='disabled')
         self.status_label.config(text='Queue stopped')
+        self.refresh_all_data()
 
     def stop_automation(self):
         self.broadcast_stop.set()
