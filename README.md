@@ -21,7 +21,7 @@ Run `setup\setup.bat`, then `RUN.bat`. Python 3.10+ is required. Setup creates a
 
 **Videos** columns: `video_id`, `filename`, `title`, `description`, `thumbnail`, `source_url`.
 
-- `video_id` is the filename without extension, e.g. My Video for My Video.mp4.
+- Enter only `video_id`, e.g. My Video. Leave `filename` blank: the app finds My Video.mp4 automatically (also supported video extensions), then fills the filename itself. No full video path is required in the Sheet.
 - Edit the master title and description to control metadata. Thumbnail detection uses the same-name PNG/JPG/JPEG next to the actual video file. Keep only one matching thumbnail.
 - Local discovery automatically adds files not yet in Videos. Different videos must not share the same filename stem.
 - Internal content hashes recognize identical video data; hashes are never used as Sheet video IDs.

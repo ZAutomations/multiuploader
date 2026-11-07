@@ -142,8 +142,10 @@ class BroadcastQueue:
             if len(images)>1: self.log(f'Multiple thumbnails for {video.name}; keep only one image')
             self.store.add_video(vid,video,info);infos[vid]=info
             self.state.setdefault(vid,{'filename':video.name,'success':{},'pending':{}})
-            if self.book and not master:
-                try: self.upsert(self.worksheet('Videos',MASTER_HEADERS),MASTER_HEADERS,[video.stem,video.name,info['title'],info['caption'],info['thumbnail'],info.get('tiktok_url','')])
+            # filename is optional user input: resolve from video_id/file stem,
+            # then fill the real detected filename in the master sheet.
+            if self.book and (not master or not master.get('filename','').strip()):
+                try: self.upsert(self.worksheet('Videos',MASTER_HEADERS),MASTER_HEADERS,[video.stem,video.name,info['title'],info['caption'],info['thumbnail'],(master or {}).get('source_url') or info.get('tiktok_url','')])
                 except Exception as e:self.log(f'Master Videos sync pending: {e}')
         # Register AFTER discovery so 'future' excludes the existing library.
         for identity,c in targets.items():
