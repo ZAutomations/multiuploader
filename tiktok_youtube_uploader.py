@@ -1461,11 +1461,11 @@ class TikTokYouTubeUploader:
             response = None
             last_progress = 0
 
+            print("  Upload started (automatic network retries enabled)")
             while response is None:
                 # Keep the same resumable request/session when SSL or socket
                 # connections fail. The installed Google client retries these
                 # transport failures with backoff and tracks upload progress.
-                print("  Connecting/uploading (up to 3 network retries)...")
                 status, response = request.next_chunk(num_retries=3)
                 if status:
                     progress = int(status.progress() * 100)
@@ -1575,12 +1575,17 @@ class TikTokYouTubeUploader:
                 raise RuntimeError('YouTube authentication unavailable for thumbnail')
             # A Short must finish processing before thumbnails.set is called.
             deadline = time.monotonic() + 600
+            print(f'  Waiting for YouTube processing before thumbnail: {video_id}')
+            polls = 0
             while True:
                 if stop and stop.is_set():
                     return False
                 result = youtube.videos().list(part='processingDetails', id=video_id).execute(num_retries=3)
                 items = result.get('items', [])
                 status = items[0].get('processingDetails', {}).get('processingStatus') if items else None
+                polls += 1
+                if polls == 1 or polls % 6 == 0:
+                    print(f'  Video {video_id} processing status: {status or "not available yet"}')
                 if status == 'succeeded':
                     break
                 if status in ('failed', 'terminated'):

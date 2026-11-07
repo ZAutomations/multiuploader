@@ -24,6 +24,26 @@ class BroadcastQueue:
         temporary.write_text(json.dumps(self.state, indent=2), encoding='utf-8')
         os.replace(temporary, self.path)
 
+    def sync_results(self, video, entry, targets, sheet_targets, worksheets, row_maps, status):
+        for tab, worksheet in worksheets.items():
+            members = [k for k,c in sheet_targets.items() if c['sheet_tab_name'] == tab]
+            results = [entry['success'][k] for k in members if k in entry['success']]
+            if not results:
+                continue
+            row, values = row_maps[tab][video.stem]
+            current = worksheet.row_values(row)
+            if not current or current[0].strip() != video.stem:
+                raise ValueError('Sheet rows changed; video retained for recovery')
+            update = [[
+                '\n'.join(r['youtube_url'] for r in results),
+                '\n'.join(r['youtube_id'] for r in results),
+                '\n'.join(r.get('upload_time', 'Not recorded by previous version') for r in results),
+                '\n'.join(r.get('scheduled_time', '') for r in results), status]]
+            worksheet.batch_update([{'range': f'F{row}:J{row}', 'values': update}], value_input_option='RAW')
+            if worksheet.get(f'F{row}:J{row}') != update:
+                raise ValueError('Sheet verification failed; saved uploads will be skipped on retry')
+            self.log(f'Sheet row {row} updated: URLs, IDs, upload times, schedules, status={status}')
+
     def run(self, source, uploaded, channels, delay=0, use_sheets=False, metadata=None, max_videos=None):
         source, uploaded = Path(source).resolve(), Path(uploaded).resolve()
         if not source.is_dir():
@@ -126,10 +146,11 @@ class BroadcastQueue:
                 self.save()
                 result = self.backend.upload_to_youtube(channel, data, info, schedule)
                 if result and result.get('youtube_id'):
-                    entry['success'][identity] = dict(result, scheduled_time=schedule)
+                    entry['success'][identity] = dict(result, scheduled_time=schedule, upload_time=datetime.now().strftime('%d-%b-%Y %I:%M %p'))
                     del entry['pending'][identity]
                     self.save()
                     self.log(f"Success: {channel.get('channel_name', identity)}: {result['youtube_url']}")
+                    self.sync_results(video, entry, targets, sheet_targets, worksheets, row_maps, 'uploading')
                 else:
                     entry['pending'][identity] = {
                         'started': datetime.now().isoformat(),
@@ -140,11 +161,14 @@ class BroadcastQueue:
                     detail = getattr(self.backend, 'last_upload_error', '')
                     self.log(f'Upload failed for {channel.get("channel_name", identity)} ({identity}): {detail or "YouTube API returned no video ID"}. Video remains in source; queue paused.')
                     return
-                if self.stop.wait(max(0, delay)):
-                    return
+                if identity != next(reversed(targets)):
+                    self.log(f'Waiting {delay:g} seconds before next channel...')
+                    if self.stop.wait(max(0, delay)):
+                        return
             if not all(identity in entry['success'] for identity in targets):
                 self.log('Video incomplete; queue paused until all selected channels succeed.')
                 return
+            self.sync_results(video, entry, targets, sheet_targets, worksheets, row_maps, 'uploaded; thumbnail pending')
             images = [p for p in source.iterdir() if p.is_file() and p.stem == video.stem and p.suffix.lower() in ('.jpg', '.jpeg', '.png')]
             if len(images) > 1:
                 raise ValueError(f'Multiple thumbnails match {video.name}; keep one JPG or PNG')
@@ -163,27 +187,7 @@ class BroadcastQueue:
                     self.save()
             else:
                 self.log(f'No same-name JPG/PNG found for {video.name}; continuing without custom thumbnail')
-            # Persist every destination result into its existing row. For a shared
-            # tab retain all channel URLs/IDs in the same F/G cells.
-            for tab, worksheet in worksheets.items():
-                members = [k for k,c in sheet_targets.items() if c['sheet_tab_name'] == tab]
-                if not members:
-                    continue
-                row, values = row_maps[tab][video.stem]
-                current = worksheet.row_values(row)
-                if not current or current[0].strip() != video.stem:
-                    raise ValueError('Sheet rows changed during upload; video kept in source for safe recovery')
-                results = [entry['success'][k] for k in members]
-                update = [[
-                    '\n'.join(r['youtube_url'] for r in results),
-                    '\n'.join(r['youtube_id'] for r in results),
-                    datetime.now().strftime('%d-%b-%Y %I:%M %p'),
-                    '\n'.join(r.get('scheduled_time','') for r in results), 'done']]
-                worksheet.batch_update([{'range': f'F{row}:J{row}', 'values': update}], value_input_option='RAW')
-                actual = worksheet.get(f'F{row}:J{row}')
-                if actual != update:
-                    raise ValueError('Sheet verification failed; video kept in source. Successful uploads will be skipped on retry')
-                self.log(f'Updated existing sheet row {row}: ID {video.stem}')
+            self.sync_results(video, entry, targets, sheet_targets, worksheets, row_maps, 'done')
             # Move completed videos outside the source tree so subfolder scans
             # cannot enqueue the Uploaded folder again.
             destination = uploaded / video.name
