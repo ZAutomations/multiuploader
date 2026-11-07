@@ -35,11 +35,20 @@ class BroadcastQueue:
             current = worksheet.row_values(row)
             if not current or current[0].strip() != video.stem:
                 raise ValueError('Sheet rows changed; video retained for recovery')
-            update = [[
-                '\n'.join(r['youtube_url'] for r in results),
-                '\n'.join(r['youtube_id'] for r in results),
-                '\n'.join(r.get('upload_time', 'Not recorded by previous version') for r in results),
-                '\n'.join(r.get('scheduled_time', '') for r in results), status]]
+            old = list(current) + [''] * max(0, 10-len(current))
+            old_ids = old[6].splitlines()
+            urls, stamps, schedules = old[5].splitlines(), old[7].splitlines(), old[8].splitlines()
+            merged = {}
+            for i, old_id in enumerate(old_ids):
+                if old_id.strip():
+                    merged[old_id.strip()] = [urls[i] if i < len(urls) else '',
+                        old_id.strip(), stamps[i] if i < len(stamps) else 'Not recorded by previous version',
+                        schedules[i] if i < len(schedules) else '']
+            for r in results:
+                merged[r['youtube_id']] = [r['youtube_url'], r['youtube_id'],
+                    r.get('upload_time', 'Not recorded by previous version'), r.get('scheduled_time', '')]
+            rows = list(merged.values())
+            update = [['\n'.join(r[i] for r in rows) for i in range(4)] + [status]]
             worksheet.batch_update([{'range': f'F{row}:J{row}', 'values': update}], value_input_option='RAW')
             if worksheet.get(f'F{row}:J{row}') != update:
                 raise ValueError('Sheet verification failed; saved uploads will be skipped on retry')
@@ -60,19 +69,16 @@ class BroadcastQueue:
         for entry in self.state.values():
             history.extend(dates(entry.get('success', {}).get(identity, {}).get('scheduled_time')))
         tab = channel.get('sheet_tab_name', '')
-        members = [k for k,c in targets.items() if c.get('sheet_tab_name', '') == tab]
-        index = members.index(identity)
-        # Existing shared cells preserve destination order. A single completed
-        # result belongs to the first member, not all destinations.
+        owned_ids = {e.get('success', {}).get(identity, {}).get('youtube_id') for e in self.state.values()}
         for _, values in row_maps.get(tab, {}).values():
-            times = values[8].splitlines()
-            ids = values[6].splitlines()
-            if index < len(times) and index < len(ids) and ids[index].strip():
-                history.extend(dates(times[index]))
+            times, ids = values[8].splitlines(), values[6].splitlines()
+            for i, video_id in enumerate(ids):
+                if video_id in owned_ids and i < len(times):
+                    history.extend(dates(times[i]))
         now = datetime.now()
         last = max(history) if history else now
         requested_lines = str(requested or '').splitlines()
-        chosen = dates(requested_lines[index] if index < len(requested_lines) else '')
+        chosen = dates(requested_lines[0]) if len(requested_lines) == 1 else []
         minimum = max(now + timedelta(minutes=30), last + timedelta(minutes=1))
         if chosen and chosen[0] >= minimum:
             return chosen[0].strftime(fmt)
@@ -106,7 +112,10 @@ class BroadcastQueue:
             for identity, channel in sheet_targets.items():
                 tab = channel.get('sheet_tab_name', '')
                 if tab not in worksheets:
-                    worksheets[tab] = book.worksheet(tab)
+                    try:
+                        worksheets[tab] = book.worksheet(tab)
+                    except Exception as error:
+                        raise ValueError(f"Cannot open Sheet tab '{tab}' for {channel.get('channel_name', identity)}. Set the exact existing tab name in Edit Channel. Details: {error}") from error
                     rows = worksheets[tab].get_all_values()
                     mapping = {}
                     for number, values in enumerate(rows[1:], start=2):
@@ -121,9 +130,9 @@ class BroadcastQueue:
                 # The first destination's sheet supplies the shared queue order.
                 if identity == next(iter(sheet_targets)):
                     for video_id, (number, values) in row_maps[tab].items():
-                        if values[9].strip().lower() in ('done', 'scheduled', 'uploaded'):
-                            continue
                         matches = [f for f in source.iterdir() if f.is_file() and f.suffix.lower() in EXTENSIONS and f.stem == video_id]
+                        if not matches and uploaded != source:
+                            matches = [f for f in uploaded.iterdir() if f.is_file() and f.suffix.lower() in EXTENSIONS and f.stem == video_id]
                         if len(matches) > 1:
                             raise ValueError(f'Multiple files match Sheet ID {video_id}')
                         if matches:
@@ -149,9 +158,6 @@ class BroadcastQueue:
                 tab = channel['sheet_tab_name']
                 if video.stem not in row_maps[tab]:
                     raise ValueError(f'Sheet {tab} has no existing row for ID {video.stem}; no new row will be created')
-                _, values = row_maps[tab][video.stem]
-                if values[9].strip().lower() in ('done', 'scheduled', 'uploaded') and values[6].strip():
-                    entry['success'].setdefault(identity, {'youtube_id': values[6], 'youtube_url': values[5], 'scheduled_time': values[8]})
             self.save()
             data = None
             for identity, channel in targets.items():
@@ -207,7 +213,7 @@ class BroadcastQueue:
                 self.log('Video incomplete; queue paused until all selected channels succeed.')
                 return
             self.sync_results(video, entry, targets, sheet_targets, worksheets, row_maps, 'uploaded; thumbnail pending')
-            images = [p for p in source.iterdir() if p.is_file() and p.stem == video.stem and p.suffix.lower() in ('.jpg', '.jpeg', '.png')]
+            images = [p for p in video.parent.iterdir() if p.is_file() and p.stem == video.stem and p.suffix.lower() in ('.jpg', '.jpeg', '.png')]
             if len(images) > 1:
                 raise ValueError(f'Multiple thumbnails match {video.name}; keep one JPG or PNG')
             thumbnail = images[0] if images else None
@@ -240,17 +246,19 @@ class BroadcastQueue:
             # Move completed videos outside the source tree so subfolder scans
             # cannot enqueue the Uploaded folder again.
             destination = uploaded / video.name
-            if destination.exists():
+            if destination.exists() and destination.resolve() != video.resolve():
                 destination = uploaded / f'{video.stem}_{uuid.uuid4().hex[:10]}{video.suffix}'
             entry['destination'] = str(destination)
             self.save()
-            shutil.move(str(video), str(destination))
+            if video.resolve() != destination.resolve():
+                shutil.move(str(video), str(destination))
             self.log(f'Moved to uploaded: {destination.name}')
             if thumbnail:
                 thumbnail_dest = uploaded / (destination.stem + thumbnail.suffix)
-                if thumbnail_dest.exists():
+                if thumbnail_dest.exists() and thumbnail_dest.resolve() != thumbnail.resolve():
                     thumbnail_dest = uploaded / f'{destination.stem}_{uuid.uuid4().hex[:10]}{thumbnail.suffix}'
-                shutil.move(str(thumbnail), str(thumbnail_dest))
+                if thumbnail.resolve() != thumbnail_dest.resolve():
+                    shutil.move(str(thumbnail), str(thumbnail_dest))
                 for result in entry['success'].values():
                     if result.get('thumbnail_pending'):
                         result['thumbnail_source'] = str(thumbnail_dest)
