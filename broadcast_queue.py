@@ -72,7 +72,7 @@ class BroadcastQueue:
             ws = self.worksheet(tab,HEADERS)
             thumb = 'set' if result.get('thumbnail_sha256') else ('pending' if info.get('thumbnail') else 'none')
             status = 'uploaded' if result.get('youtube_id') else ('uncertain' if pending else 'pending')
-            self.upsert(ws,HEADERS,[info['video_id'],video.name,info['title'],info.get('caption',''),info.get('thumbnail',''),result.get('youtube_url',''),result.get('youtube_id',''),result.get('upload_time',''),result.get('scheduled_time',''),status,thumb,result.get('thumbnail_error','') or (pending or {}).get('error','')])
+            self.upsert(ws,HEADERS,[info['video_id'],video.name,info['title'],info.get('caption',''),Path(info['thumbnail']).name if info.get('thumbnail') else '',result.get('youtube_url',''),result.get('youtube_id',''),result.get('upload_time',''),result.get('scheduled_time',''),status,thumb,result.get('thumbnail_error','') or (pending or {}).get('error','')])
         except Exception as e:
             self.log(f'Sheet sync pending for {channel.get("channel_name",identity)}: {e}. SQLite saved; uploads continue.')
 
@@ -137,6 +137,8 @@ class BroadcastQueue:
             info['video_id']=video.stem
             master=self.master.get(video.stem)
             if master: info.update(title=master.get('title') or video.stem,caption=master.get('description',''))
+            # video_id is the common filename stem for both assets.
+            # Sheet filename/thumbnail cells are generated output, never lookup inputs.
             images=[p for p in video.parent.iterdir() if p.is_file() and p.stem.casefold()==video.stem.casefold() and p.suffix.lower() in ('.png','.jpg','.jpeg')]
             info['thumbnail']=str(images[0]) if len(images)==1 else ''
             if len(images)>1: self.log(f'Multiple thumbnails for {video.name}; keep only one image')
@@ -144,8 +146,8 @@ class BroadcastQueue:
             self.state.setdefault(vid,{'filename':video.name,'success':{},'pending':{}})
             # filename is optional user input: resolve from video_id/file stem,
             # then fill the real detected filename in the master sheet.
-            if self.book and (not master or not master.get('filename','').strip()):
-                try: self.upsert(self.worksheet('Videos',MASTER_HEADERS),MASTER_HEADERS,[video.stem,video.name,info['title'],info['caption'],info['thumbnail'],(master or {}).get('source_url') or info.get('tiktok_url','')])
+            if self.book and (not master or master.get('filename','') != video.name or master.get('thumbnail','') != (Path(info['thumbnail']).name if info['thumbnail'] else '')):
+                try: self.upsert(self.worksheet('Videos',MASTER_HEADERS),MASTER_HEADERS,[video.stem,video.name,info['title'],info['caption'],Path(info['thumbnail']).name if info['thumbnail'] else '',(master or {}).get('source_url') or info.get('tiktok_url','')])
                 except Exception as e:self.log(f'Master Videos sync pending: {e}')
         # Register AFTER discovery so 'future' excludes the existing library.
         for identity,c in targets.items():

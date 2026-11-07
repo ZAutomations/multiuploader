@@ -47,3 +47,7 @@ The first enabled channel supplies TikTok username and sheet-free setting. The s
 ## Private files / backups
 
 The repository excludes `.app_password`, OAuth tokens, `youtube_credentials`, private channel/config JSON, `library.sqlite3` and its WAL/SHM files, legacy history and backups. For another PC, stop the app first, then transfer your private credentials/config/history/database separately. A fresh clone has no accounts or prior upload history. Back up the database while the app is closed; do not delete it just to resolve an error.
+
+### One ID links both assets
+
+For `video_id = My Video`, keep `My Video.mp4` and `My Video.png` (or JPG/JPEG) together in the library. Leave both `filename` and `thumbnail` cells blank; sync fills them from the detected files. The ID is the shared filename stem, not the displayed YouTube title. The tool ignores manually entered asset names and uses the ID match. No file paths need to be typed in Sheets.
