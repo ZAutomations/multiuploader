@@ -1,4 +1,5 @@
 """Video-first broadcast queue. No network operations are performed at import."""
+import random
 import hashlib
 import json
 import os
@@ -43,6 +44,43 @@ class BroadcastQueue:
             if worksheet.get(f'F{row}:J{row}') != update:
                 raise ValueError('Sheet verification failed; saved uploads will be skipped on retry')
             self.log(f'Sheet row {row} updated: URLs, IDs, upload times, schedules, status={status}')
+
+    def next_schedule(self, identity, channel, targets, row_maps, requested=''):
+        """Track each destination independently even when cells contain multiple times."""
+        fmt = '%d-%b-%Y %I:%M %p'
+        def dates(value):
+            result = []
+            for line in str(value or '').splitlines():
+                try:
+                    result.append(datetime.strptime(line.strip(), fmt))
+                except ValueError:
+                    pass
+            return result
+        history = []
+        for entry in self.state.values():
+            history.extend(dates(entry.get('success', {}).get(identity, {}).get('scheduled_time')))
+        tab = channel.get('sheet_tab_name', '')
+        members = [k for k,c in targets.items() if c.get('sheet_tab_name', '') == tab]
+        index = members.index(identity)
+        # Existing shared cells preserve destination order. A single completed
+        # result belongs to the first member, not all destinations.
+        for _, values in row_maps.get(tab, {}).values():
+            times = values[8].splitlines()
+            ids = values[6].splitlines()
+            if index < len(times) and index < len(ids) and ids[index].strip():
+                history.extend(dates(times[index]))
+        now = datetime.now()
+        last = max(history) if history else now
+        requested_lines = str(requested or '').splitlines()
+        chosen = dates(requested_lines[index] if index < len(requested_lines) else '')
+        minimum = max(now + timedelta(minutes=30), last + timedelta(minutes=1))
+        if chosen and chosen[0] >= minimum:
+            return chosen[0].strftime(fmt)
+        gap = max(1, random.uniform(float(self.backend.schedule_gap_min_hours), float(self.backend.schedule_gap_max_hours))*60
+                  + random.randint(-int(self.backend.schedule_gap_random_minutes), int(self.backend.schedule_gap_random_minutes)))
+        result = max(minimum, max(last, now) + timedelta(minutes=gap))
+        self.log(f"Schedule for {channel.get('channel_name', identity)}: previous={last.strftime(fmt)}, next={result.strftime(fmt)}")
+        return result.strftime(fmt)
 
     def run(self, source, uploaded, channels, delay=0, use_sheets=False, metadata=None, max_videos=None):
         source, uploaded = Path(source).resolve(), Path(uploaded).resolve()
@@ -139,9 +177,9 @@ class BroadcastQueue:
                 sheet_tab = channel.get('sheet_tab_name', '')
                 schedule_dt = minimum_schedule
                 if use_sheets and sheet_tab and not channel.get('sheet_free_mode', False):
-                    proposed = info.get('scheduled_time') or self.backend.calculate_schedule_time(sheet_tab)
-                    schedule_dt = max(minimum_schedule, datetime.strptime(proposed, '%d-%b-%Y %I:%M %p'))
-                schedule = schedule_dt.strftime('%d-%b-%Y %I:%M %p')
+                    schedule = self.next_schedule(identity, channel, targets, row_maps, info.get('scheduled_time', ''))
+                else:
+                    schedule = schedule_dt.strftime('%d-%b-%Y %I:%M %p')
                 entry['pending'][identity] = {'started': datetime.now().isoformat(), 'schedule': schedule}
                 self.save()
                 result = self.backend.upload_to_youtube(channel, data, info, schedule)
