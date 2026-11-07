@@ -302,6 +302,15 @@ class TikTokYouTubeUploader:
         return random.choice(self.user_agents)
 
     def init_sheets_client(self):
+        # Local Excel mode never starts Google Sheets OAuth or network setup.
+        tracking_file=SCRIPT_DIR/'broadcast_config.json'
+        try:
+            if tracking_file.exists() and json.loads(tracking_file.read_text(encoding='utf-8-sig')).get('tracking_mode')=='excel':
+                self.sheets_client=None
+                print('Local Excel mode: Google Sheets connection skipped')
+                return
+        except (OSError, ValueError):
+            pass
         """Initialize Google Sheets client"""
         try:
             service_account_file = self.credentials_folder / 'service_account.json'

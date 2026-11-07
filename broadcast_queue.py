@@ -87,7 +87,7 @@ class BroadcastQueue:
         gap=max(1,random.uniform(float(self.backend.schedule_gap_min_hours),float(self.backend.schedule_gap_max_hours))*60+random.randint(-int(self.backend.schedule_gap_random_minutes),int(self.backend.schedule_gap_random_minutes)))
         return max(now+timedelta(minutes=30),last+timedelta(minutes=gap)).strftime(FMT)
 
-    def run(self, source, uploaded, channels, delay=0, use_sheets=False, metadata=None, max_videos=None, ingest_only=False):
+    def run(self, source, uploaded, channels, delay=0, use_sheets=False, metadata=None, max_videos=None, ingest_only=False, excel_path=None):
         source, uploaded=Path(source).resolve(),Path(uploaded).resolve()
         if not source.is_dir(): raise ValueError('Shared library folder does not exist')
         targets={}
@@ -111,22 +111,31 @@ class BroadcastQueue:
                 raise ValueError(f'Two different videos have the same title ID: {p.stem}')
             files[vid]=p
         legacy_metadata={}
-        if use_sheets and self.backend.sheets_client:
+        if excel_path:
+            from local_workbook import LocalWorkbook
+            try:
+                self.book=LocalWorkbook(excel_path)
+                ws=self.worksheet('Videos',MASTER_HEADERS)
+                self.master=read_rows(ws)
+                self.log(f'Local Excel tracking: {Path(excel_path).resolve()}')
+            except Exception as e:
+                self.book=None
+                self.log(f'Excel unavailable; SQLite is safe. Sync again after closing Excel: {e}')
+        elif use_sheets and self.backend.sheets_client:
             try:
                 self.book=self.backend.sheets_client.open_by_key(self.backend.spreadsheet_id)
                 ws=self.worksheet('Videos',MASTER_HEADERS)
                 self.master=read_rows(ws)
-                # Import metadata from existing source tabs without editing them.
                 for tab in {c.get('sheet_tab_name','') for c in channels.values()}:
-                    if not tab or tab=='Videos': continue
+                    if not tab or tab=='Videos':continue
                     try:
                         rows=self.book.worksheet(tab).get_all_values()
                         for row in rows[1:]:
-                            if row and row[0]: legacy_metadata.setdefault(row[0],{'title':row[2] if len(row)>2 else row[0],'caption':row[3] if len(row)>3 else ''})
-                    except Exception as e: self.log(f'Legacy metadata tab {tab} unavailable: {e}')
+                            if row and row[0]:legacy_metadata.setdefault(row[0],{'title':row[2] if len(row)>2 else row[0],'caption':row[3] if len(row)>3 else ''})
+                    except Exception as e:self.log(f'Legacy metadata tab {tab} unavailable: {e}')
             except Exception as e:
                 self.book=None
-                self.log(f'Sheets unavailable; using local library metadata. Sync will retry next run: {e}')
+                self.log(f'Sheets unavailable; local metadata and SQLite tracking active: {e}')
         elif use_sheets:
             self.log('Sheets disconnected; SQLite tracking active. Sync will retry next run.')
         infos={}
@@ -154,6 +163,10 @@ class BroadcastQueue:
             self.store.register(identity,c.get('channel_name',identity),c.get('library_policy','all'))
         self.save()
         if ingest_only:
+            for vid,video in files.items():
+                for identity,c in targets.items():
+                    if self.store.eligible(vid,identity):
+                        self.mirror(video,infos[vid],identity,c,self.state[vid]['success'].get(identity,{}),self.state[vid]['pending'].get(identity))
             self.log("Library indexed and Sheet sync attempted; upload phase skipped.")
             return
         count=0

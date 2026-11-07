@@ -26,3 +26,8 @@ downloads/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+
+# Private local tracking workbooks (publish only the blank sample)
+*.xlsx
+!templates/MultiUploader_Template.xlsx
+.uploader-*

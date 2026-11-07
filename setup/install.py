@@ -32,7 +32,7 @@ def main():
         MARKER.write_text(location, encoding='utf-8')
     # No --upgrade or --force-reinstall: pip skips satisfied requirements.
     run([PYTHON, '-m', 'pip', 'install', '--disable-pip-version-check', '-r', ROOT / 'requirements.txt'])
-    run([PYTHON, '-c', 'import tkinter, googleapiclient, gspread, PIL, requests, yt_dlp'])
+    run([PYTHON, '-c', 'import tkinter, googleapiclient, gspread, PIL, requests, yt_dlp, openpyxl'])
     (ROOT / 'youtube_credentials').mkdir(exist_ok=True)
     cfg_path = ROOT / 'tiktok_uploader_config.json'
     cfg = json.loads(cfg_path.read_text(encoding='utf-8-sig')) if cfg_path.exists() else {

@@ -8,3 +8,4 @@ Pillow
 
 yt-dlp
 colorama
+openpyxl>=3.1,<4

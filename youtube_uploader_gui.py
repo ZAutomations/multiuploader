@@ -38,7 +38,29 @@ class BroadcastGUI(TikTokYouTubeGUI):
             tk.Button(row,text='Browse',command=lambda v=variable:self.browse_folder(v)).pack(side='right')
         tk.Button(library,text='Sync library / Sheets (no video uploads)',command=self.sync_library_only).pack(fill='x')
         tk.Button(library,text='Include existing videos for selected channels',command=self.include_existing).pack(fill='x')
+        tracking=tk.LabelFrame(library,text='Metadata and upload results')
+        tracking.pack(fill='x',pady=5)
+        self.tracking_mode=tk.StringVar(value=self.broadcast_config.get('tracking_mode','google'))
+        self.excel_var=tk.StringVar(value=self.broadcast_config.get('excel_path',str(BASE/'VideoLibrary.xlsx')))
+        for label,value in [('Google Sheets','google'),('Local Excel (.xlsx)','excel')]:
+            tk.Radiobutton(tracking,text=label,variable=self.tracking_mode,value=value,command=self.save_tracking).pack(anchor='w')
+        tk.Entry(tracking,textvariable=self.excel_var).pack(fill='x')
+        tk.Button(tracking,text='Choose / create Excel workbook',command=self.browse_excel).pack(fill='x')
         self.ingest_requested=False
+
+    def save_tracking(self):
+        path=BASE/'broadcast_config.json'
+        cfg=json.loads(path.read_text(encoding='utf-8-sig')) if path.exists() else {}
+        cfg.update(tracking_mode=self.tracking_mode.get(),excel_path=self.excel_var.get().strip())
+        path.write_text(json.dumps(cfg,indent=2),encoding='utf-8')
+        if self.uploader and self.tracking_mode.get()=='excel':self.uploader.sheets_client=None
+
+    def browse_excel(self):
+        result=filedialog.asksaveasfilename(title='Select existing or create local workbook',defaultextension='.xlsx',filetypes=[('Excel workbook','*.xlsx')],initialfile='VideoLibrary.xlsx',confirmoverwrite=False)
+        if result:
+            self.excel_var.set(result)
+            self.tracking_mode.set('excel')
+            self.save_tracking()
 
     def include_existing(self):
         if self.is_running:return
@@ -229,7 +251,15 @@ class BroadcastGUI(TikTokYouTubeGUI):
                     c['library_policy']='all' if answer else 'future'
         self.review_pending()
         username = self.tiktok_var.get().strip().lstrip('@')
-        use_sheets = self.use_sheets_var.get()
+        excel_path=self.excel_var.get().strip() if self.tracking_mode.get()=='excel' else None
+        if self.tracking_mode.get()=='excel' and not excel_path:
+            messagebox.showerror('Workbook','Choose a local .xlsx file')
+            return
+        if excel_path and Path(excel_path).suffix.lower()!='.xlsx':
+            messagebox.showerror('Workbook','Choose an .xlsx workbook')
+            return
+        self.save_tracking()
+        use_sheets = self.tracking_mode.get()=='google' and self.use_sheets_var.get()
         cfg = dict(self.config)
         cfg.update({
             'credentials_folder': self.creds_entry.get().strip(),
@@ -249,7 +279,7 @@ class BroadcastGUI(TikTokYouTubeGUI):
         self.uploader.schedule_gap_max_hours = cfg['schedule_gap_max_hours']
         self.uploader.schedule_gap_random_minutes = cfg['schedule_gap_random_minutes']
         self.uploader.fetch_hours_limit = cfg['fetch_hours_limit']
-        (BASE / 'broadcast_config.json').write_text(json.dumps({'source': self.source_var.get().strip(), 'uploaded': self.uploaded_var.get().strip(), 'tiktok_username': username, 'use_sheets': use_sheets}, indent=2), encoding='utf-8')
+        (BASE / 'broadcast_config.json').write_text(json.dumps({'source': self.source_var.get().strip(), 'uploaded': self.uploaded_var.get().strip(), 'tiktok_username': username, 'use_sheets': use_sheets, 'tracking_mode':self.tracking_mode.get(), 'excel_path':self.excel_var.get().strip()}, indent=2), encoding='utf-8')
         self.broadcast_stop.clear()
         self.uploader.stop_requested = False
         self.is_running = True
@@ -276,7 +306,7 @@ class BroadcastGUI(TikTokYouTubeGUI):
                         index = json.loads(index_path.read_text(encoding='utf-8'))
                         metadata = {f'tiktok_{key}.mp4': value.get('info', {}) for key, value in index.items() if isinstance(value, dict)}
                 with contextlib.redirect_stdout(LogStream()):
-                    BroadcastQueue(self.uploader, BASE / 'broadcast_state.json', self.log, self.broadcast_stop).run(source, uploaded, channels, delay, use_sheets=use_sheets, metadata=metadata, max_videos=1 if self._one_video else None, ingest_only=ingest_only)
+                    BroadcastQueue(self.uploader, BASE / 'broadcast_state.json', self.log, self.broadcast_stop).run(source, uploaded, channels, delay, use_sheets=use_sheets, metadata=metadata, max_videos=1 if self._one_video else None, ingest_only=ingest_only, excel_path=excel_path)
             except Exception as error:
                 self.log(f'Queue stopped: {error}', 'error')
             finally:

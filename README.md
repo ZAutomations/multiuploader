@@ -51,3 +51,15 @@ The repository excludes `.app_password`, OAuth tokens, `youtube_credentials`, pr
 ### One ID links both assets
 
 For `video_id = My Video`, keep `My Video.mp4` and `My Video.png` (or JPG/JPEG) together in the library. Leave both `filename` and `thumbnail` cells blank; sync fills them from the detected files. The ID is the shared filename stem, not the displayed YouTube title. The tool ignores manually entered asset names and uses the ID match. No file paths need to be typed in Sheets.
+
+## Local Excel mode (Google Sheets optional)
+
+1. Restart RUN.bat. Under Permanent shared library -> Metadata and upload results, select **Local Excel (.xlsx)**.
+2. Click **Choose / create Excel workbook**. Select an existing template/workbook or a new file such as VideoLibrary.xlsx. The app creates the required tabs if missing.
+3. Click **Sync library / Sheets (no video uploads)**. This button works for the selected destination: local Excel or Google Sheets.
+4. Edit title and description in the workbook's Videos tab. Only video_id is needed for matching files; filename and thumbnail are generated. Close Excel after edits, then start uploads.
+5. Each channel's results appear in its own tab in that same local workbook. Google Sheets connection/authentication is skipped in local mode. YouTube credentials and internet are still required for uploads.
+
+Local workbook writes use a temporary XLSX plus atomic replacement. If Excel locks the file or a concurrent edit is detected, the original file is preserved and results remain in SQLite. Close Excel and use the sync-only button to retry; completed videos are not uploaded again. The adapter reopens the workbook per operation to retain saved user edits and other tabs. Do not use macros/encrypted files; the supported format is ordinary .xlsx. Local workbooks are private and ignored by Git; the sample under templates is the exception.
+
+The dependency openpyxl is installed by setup, with existing compatible installations skipped. Keep both your workbook and library.sqlite3 when transferring this workflow to another PC.
