@@ -1562,14 +1562,43 @@ class TikTokYouTubeUploader:
             print(f"  {Colors.RED}❌ Upload failed: {e}{Colors.RESET}")
             return None
 
+    @staticmethod
+    def prepare_thumbnail(image_path):
+        """Create an in-memory upload copy under the client's 2 MB limit."""
+        from PIL import Image, ImageOps
+        from io import BytesIO
+        image_path = Path(image_path)
+        limit = 2 * 1024 * 1024
+        raw = image_path.read_bytes()
+        mime = 'image/png' if image_path.suffix.lower() == '.png' else 'image/jpeg'
+        if len(raw) < limit:
+            return raw, mime
+        with Image.open(BytesIO(raw)) as original:
+            oriented = ImageOps.exif_transpose(original)
+            rgba = oriented.convert('RGBA')
+            rgb = Image.new('RGB', rgba.size, 'white')
+            rgb.paste(rgba, mask=rgba.getchannel('A'))
+            rgb.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
+            while True:
+                for quality in (92, 85, 75, 65, 50):
+                    buffer = BytesIO()
+                    rgb.save(buffer, format='JPEG', quality=quality, optimize=True)
+                    compressed = buffer.getvalue()
+                    if len(compressed) < limit:
+                        print(f'  Thumbnail compressed: {len(raw)//1024} KB -> {len(compressed)//1024} KB (original unchanged)')
+                        return compressed, 'image/jpeg'
+                width, height = rgb.size
+                if max(width, height) <= 320:
+                    raise ValueError('Cannot compress thumbnail below 2 MB')
+                rgb = rgb.resize((max(1, int(width*.75)), max(1, int(height*.75))), Image.Resampling.LANCZOS)
+
     def set_video_thumbnail(self, channel_config, video_id, image_path, stop=None):
         """Retry thumbnail separately from video upload; never re-upload video."""
         try:
-            from googleapiclient.http import MediaFileUpload
+            from googleapiclient.http import MediaIoBaseUpload
             import time
             image = Path(image_path)
-            if image.stat().st_size > 50 * 1024 * 1024:
-                raise ValueError('Thumbnail exceeds 50 MB')
+            thumbnail_bytes, mime = self.prepare_thumbnail(image)
             youtube = self.get_youtube_service(channel_config)
             if not youtube:
                 raise RuntimeError('YouTube authentication unavailable for thumbnail')
@@ -1597,8 +1626,8 @@ class TikTokYouTubeUploader:
                         return False
                 else:
                     time.sleep(5)
-            mime = 'image/png' if image.suffix.lower() == '.png' else 'image/jpeg'
-            youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(str(image), mimetype=mime)).execute(num_retries=3)
+            media = MediaIoBaseUpload(BytesIO(thumbnail_bytes), mimetype=mime, resumable=False)
+            youtube.thumbnails().set(videoId=video_id, media_body=media).execute(num_retries=3)
             print(f"  Thumbnail set: {channel_config.get('channel_name', '')}")
             return True
         except Exception as error:
