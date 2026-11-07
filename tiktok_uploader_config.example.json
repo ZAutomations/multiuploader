@@ -1,0 +1,9 @@
+{
+  "credentials_folder": "youtube_credentials",
+  "spreadsheet_url": "",
+  "schedule_gap_min_hours": 2,
+  "schedule_gap_max_hours": 3,
+  "schedule_gap_random_minutes": 40,
+  "channel_interval_minutes": 2,
+  "fetch_hours_limit": 72
+}

@@ -1,0 +1,18 @@
+{
+  "channel1": {
+    "channel_id": "channel1",
+    "channel_name": "My channel",
+    "enabled": true,
+    "credentials_file": "client_secret.json",
+    "token_file": "token_channel1",
+    "source_type": "local_folder",
+    "video_source_folder": "",
+    "video_uploaded_folder": "",
+    "sheet_tab_name": "Videos",
+    "sheet_free_mode": false,
+    "title_format": "sheet",
+    "default_description": "",
+    "default_tags": "",
+    "default_playlist_id": ""
+  }
+}
