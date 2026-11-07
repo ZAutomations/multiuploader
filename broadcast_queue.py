@@ -173,6 +173,7 @@ class BroadcastQueue:
             if len(images) > 1:
                 raise ValueError(f'Multiple thumbnails match {video.name}; keep one JPG or PNG')
             thumbnail = images[0] if images else None
+            thumbnail_failures = []
             if thumbnail:
                 image_hash = hashlib.sha256(thumbnail.read_bytes()).hexdigest()
                 for identity, channel in targets.items():
@@ -181,13 +182,23 @@ class BroadcastQueue:
                         continue
                     self.log(f'Setting thumbnail: {thumbnail.name} -> {channel.get("channel_name", identity)}')
                     if not self.backend.set_video_thumbnail(channel, uploaded_result['youtube_id'], thumbnail, self.stop):
-                        self.log('Thumbnail pending; video kept in source. Next run skips video upload and retries thumbnail.')
-                        return
+                        if self.stop.is_set():
+                            self.log('Stop requested; completed video uploads saved.')
+                            return
+                        name = channel.get('channel_name', identity)
+                        thumbnail_failures.append(name)
+                        uploaded_result['thumbnail_pending'] = True
+                        uploaded_result['thumbnail_source'] = str(thumbnail)
+                        self.save()
+                        self.log(f'Thumbnail failed for {name}; recorded for later retry. Continuing uploads.')
+                        continue
                     uploaded_result['thumbnail_sha256'] = image_hash
+                    uploaded_result.pop('thumbnail_pending', None)
+                    uploaded_result.pop('thumbnail_source', None)
                     self.save()
             else:
                 self.log(f'No same-name JPG/PNG found for {video.name}; continuing without custom thumbnail')
-            self.sync_results(video, entry, targets, sheet_targets, worksheets, row_maps, 'done')
+            self.sync_results(video, entry, targets, sheet_targets, worksheets, row_maps, 'done' + ('; thumbnail pending: ' + ', '.join(thumbnail_failures) if thumbnail_failures else ''))
             # Move completed videos outside the source tree so subfolder scans
             # cannot enqueue the Uploaded folder again.
             destination = uploaded / video.name
@@ -202,5 +213,9 @@ class BroadcastQueue:
                 if thumbnail_dest.exists():
                     thumbnail_dest = uploaded / f'{destination.stem}_{uuid.uuid4().hex[:10]}{thumbnail.suffix}'
                 shutil.move(str(thumbnail), str(thumbnail_dest))
+                for result in entry['success'].values():
+                    if result.get('thumbnail_pending'):
+                        result['thumbnail_source'] = str(thumbnail_dest)
+                self.save()
                 self.log(f'Moved thumbnail: {thumbnail_dest.name}')
         self.log('Queue finished.')
