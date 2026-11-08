@@ -20,6 +20,7 @@ class BroadcastGUI(TikTokYouTubeGUI):
         super().build_controls(parent)
         self.broadcast_stop = threading.Event()
         self.monitor_active = False
+        self._closing = False
         self._selected_targets = None
         self._one_video = False
         settings = BASE / 'broadcast_config.json'
@@ -207,6 +208,8 @@ class BroadcastGUI(TikTokYouTubeGUI):
             self.log(f'Downloaded TikTok: {video_id}')
 
     def start_automation(self):
+        if self._closing:
+            return
         if self.is_running or (self.automation_thread and self.automation_thread.is_alive()):
             return
         if not self.uploader:
@@ -315,10 +318,18 @@ class BroadcastGUI(TikTokYouTubeGUI):
         self.automation_thread.start()
 
     def close_window(self):
+        if self._closing:
+            return
+        self._closing = True
+        self.stop_automation()
+        self.btn_start.config(state='disabled')
+        self.status_label.config(text='Finishing current operation before closing...')
+        self._wait_until_closed()
+
+    def _wait_until_closed(self):
+        # Poll completion only: never send another Stop or schedule uploads here.
         if self.automation_thread and self.automation_thread.is_alive():
-            self.stop_automation()
-            self.status_label.config(text='Finishing current operation before closing...')
-            self.root.after(500, self.close_window)
+            self.root.after(500, self._wait_until_closed)
         else:
             self.root.destroy()
 
@@ -326,14 +337,24 @@ class BroadcastGUI(TikTokYouTubeGUI):
         self.is_running = False
         self._selected_targets = None
         self._one_video = False
-        self.btn_start.config(state='normal')
         self.btn_stop.config(state='disabled')
+        if self._closing:
+            return
+        self.btn_start.config(state='normal')
         self.status_label.config(text='Queue stopped')
         self.refresh_all_data()
 
     def stop_automation(self):
+        self.monitor_active = False
+        if self.uploader:
+            self.uploader.stop_requested = True
+        self.btn_stop.config(state='disabled')
+        if self.broadcast_stop.is_set():
+            return
         self.broadcast_stop.set()
-        self.log('Stop requested. Current upload will finish and be recorded.')
+        if self.is_running or (self.automation_thread and self.automation_thread.is_alive()):
+            self.status_label.config(text='Stopping after current operation...')
+            self.log('Stop requested. Current operation will finish and be recorded.')
 
 if __name__ == '__main__':
     import msvcrt
