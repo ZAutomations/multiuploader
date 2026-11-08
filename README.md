@@ -63,3 +63,5 @@ For `video_id = My Video`, keep `My Video.mp4` and `My Video.png` (or JPG/JPEG) 
 Local workbook writes use a temporary XLSX plus atomic replacement. If Excel locks the file or a concurrent edit is detected, the original file is preserved and results remain in SQLite. Close Excel and use the sync-only button to retry; completed videos are not uploaded again. The adapter reopens the workbook per operation to retain saved user edits and other tabs. Do not use macros/encrypted files; the supported format is ordinary .xlsx. Local workbooks are private and ignored by Git; the sample under templates is the exception.
 
 The dependency openpyxl is installed by setup, with existing compatible installations skipped. Keep both your workbook and library.sqlite3 when transferring this workflow to another PC.
+
+Setup also copies the tracked `templates/MultiUploader_Template.xlsx` into the main tool folder as `MultiUploader_Template.xlsx` on fresh installs. An existing workbook is always preserved. The root copy is private/ignored by Git; the clean template is included in every clone/download.

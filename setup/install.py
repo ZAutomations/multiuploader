@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -50,6 +51,21 @@ def main():
     channels = ROOT / 'tiktok_channels_config.json'
     if not channels.exists():
         channels.write_text('{}', encoding='utf-8')
+    template = ROOT / 'templates' / 'MultiUploader_Template.xlsx'
+    workbook = ROOT / 'MultiUploader_Template.xlsx'
+    if not workbook.exists():
+        if not template.is_file():
+            raise FileNotFoundError('Bundled Excel template is missing; download the complete repository')
+        # Exclusive creation avoids overwriting an existing workbook, even
+        # if another process creates it between the exists check and copy.
+        try:
+            with workbook.open('xb') as destination, template.open('rb') as source:
+                shutil.copyfileobj(source, destination)
+            print('Excel template copied to:', workbook)
+        except FileExistsError:
+            print('Existing Excel workbook preserved:', workbook)
+    else:
+        print('Existing Excel workbook preserved:', workbook)
     print('Installed in:', ROOT)
     print('Copy your own OAuth JSON / Sheets service_account.json into youtube_credentials.')
     print('Configure channels, source folders and Sheets URL in the GUI. Run RUN.bat.')
