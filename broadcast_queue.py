@@ -160,7 +160,11 @@ class BroadcastQueue:
                 except Exception as e:self.log(f'Master Videos sync pending: {e}')
         # Register AFTER discovery so 'future' excludes the existing library.
         for identity,c in targets.items():
-            self.store.register(identity,c.get('channel_name',identity),c.get('library_policy','all'))
+            # Honor a channel's explicitly named tab; legacy shared tabs such
+            # as Multi keep their generated per-channel mappings.
+            preferred=c.get('sheet_tab_name') if c.get('sheet_tab_name')==c.get('channel_name') else None
+            self.store.register(identity,c.get('channel_name',identity),c.get('library_policy','all'),preferred_tab=preferred)
+            self.log(f'Tracking tab for {c.get("channel_name",identity)}: {self.store.known(identity)[2]}')
         self.save()
         if ingest_only:
             for vid,video in files.items():

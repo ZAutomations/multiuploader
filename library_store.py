@@ -58,11 +58,22 @@ class LibraryStore:
         with self.connect() as db:
             return db.execute('SELECT policy,cutoff,tab FROM channels WHERE id=?',(channel,)).fetchone()
 
-    def register(self, identity, name, policy='all'):
+    def register(self, identity, name, policy='all', preferred_tab=None):
         import re
         tab = 'Uploads - ' + re.sub(r'[\[\]:*?/\\]', '_', name)[:10].strip() + ' - ' + identity[-8:]
+        if preferred_tab:
+            if len(preferred_tab)>31 or re.search(r'[\[\]:*?/\\]',preferred_tab):
+                raise ValueError('Channel tab name must be valid in Excel and at most 31 characters')
+            if preferred_tab.casefold() in ('videos','instructions'):
+                raise ValueError('Channel tab cannot use a reserved master/instructions name')
+            tab=preferred_tab
         with self.connect() as db:
+            conflict=db.execute('SELECT id FROM channels WHERE lower(tab)=lower(?) AND id<>?',(tab,identity)).fetchone()
+            if conflict:raise ValueError(f'Tracking tab {tab} already belongs to another channel')
             db.execute('INSERT OR IGNORE INTO channels VALUES (?,?,?,?,?)',(identity,name,policy,time.time(),tab))
+        if preferred_tab:
+            with self.connect() as db:
+                db.execute('UPDATE channels SET tab=?,name=? WHERE id=?',(tab,name,identity))
         return self.known(identity)
 
     def eligible(self, vid, channel):
