@@ -25,18 +25,22 @@ class BroadcastGUI(TikTokYouTubeGUI):
         self._one_video = False
         settings = BASE / 'broadcast_config.json'
         self.broadcast_config = json.loads(settings.read_text(encoding='utf-8-sig')) if settings.exists() else {}
-        self.source_var = tk.StringVar(value=self.broadcast_config.get('source',''))
+        initial_source=self.broadcast_config.get('source','')
+        if not initial_source:
+            initial_source=next((c.get('video_source_folder','') for c in self.channels_config.values() if c.get('enabled',True)), '')
+        self.source_var = tk.StringVar(value=initial_source)
         self.uploaded_var = tk.StringVar(value=self.broadcast_config.get('uploaded',''))
         self.tiktok_var = tk.StringVar()
         self.use_sheets_var = tk.BooleanVar(value=True)
         library = tk.LabelFrame(parent, text='Permanent shared library')
         library.pack(fill='x', pady=5)
         tk.Label(library, text='Videos stay here. Master tab: Videos. Upload history: library.sqlite3', wraplength=430).pack(anchor='w')
-        for label,variable in [('Library folder',self.source_var),('Previous Uploaded folder (optional)',self.uploaded_var)]:
+        for label,variable in [('Videos + thumbnails folder (shared by all channels)',self.source_var)]:
             row=tk.Frame(library);row.pack(fill='x',pady=3)
             tk.Label(row,text=label).pack(anchor='w')
             tk.Entry(row,textvariable=variable).pack(side='left',fill='x',expand=True)
             tk.Button(row,text='Browse',command=lambda v=variable:self.browse_folder(v)).pack(side='right')
+        tk.Button(library,text='Save shared folder',command=self.save_shared_folder).pack(fill='x')
         tk.Button(library,text='Sync library / Sheets (no video uploads)',command=self.sync_library_only).pack(fill='x')
         tk.Button(library,text='Include existing videos for selected channels',command=self.include_existing).pack(fill='x')
         tracking=tk.LabelFrame(library,text='Metadata and upload results')
@@ -48,6 +52,17 @@ class BroadcastGUI(TikTokYouTubeGUI):
         tk.Entry(tracking,textvariable=self.excel_var).pack(fill='x')
         tk.Button(tracking,text='Choose / create Excel workbook',command=self.browse_excel).pack(fill='x')
         self.ingest_requested=False
+
+    def save_shared_folder(self):
+        folder=self.source_var.get().strip()
+        if not folder or not Path(folder).is_dir():
+            messagebox.showerror('Shared folder','Select the folder containing videos and same-name thumbnails.')
+            return
+        path=BASE/'broadcast_config.json'
+        cfg=json.loads(path.read_text(encoding='utf-8-sig')) if path.exists() else {}
+        cfg['source']=folder
+        path.write_text(json.dumps(cfg,indent=2),encoding='utf-8')
+        self.log(f'Shared videos + thumbnails folder saved for all channels: {folder}')
 
     def save_tracking(self):
         path=BASE/'broadcast_config.json'
@@ -96,8 +111,6 @@ class BroadcastGUI(TikTokYouTubeGUI):
         if not enabled: raise ValueError('Enable at least one channel')
         shared=enabled[0]
         self.tiktok_var.set(shared.get('tiktok_username','') if shared.get('source_type')=='tiktok' else '')
-        if not self.source_var.get():self.source_var.set(shared.get('video_source_folder',''))
-        if not self.uploaded_var.get():self.uploaded_var.set(shared.get('video_uploaded_folder',''))
         self.use_sheets_var.set(not shared.get('sheet_free_mode',False))
 
     def process_selected_channels(self):

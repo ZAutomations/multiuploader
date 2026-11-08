@@ -1764,7 +1764,7 @@ class TikTokYouTubeGUI:
             bg=self.card_bg, fg=self.text
         ).pack(anchor=tk.W, pady=(0, 5))
 
-        source_type_var = tk.StringVar(value="tiktok")
+        source_type_var = tk.StringVar(value="local_folder" if hasattr(self, "source_var") else "tiktok")
 
         source_frame = tk.Frame(content, bg=self.card_bg)
         source_frame.pack(fill=tk.X, pady=(4, 12))
@@ -1912,6 +1912,16 @@ class TikTokYouTubeGUI:
         # Show/hide fields based on source type
         def update_source_fields():
             source_type = source_type_var.get()
+            if hasattr(self, 'source_var') and source_type == 'local_folder':
+                source_folder_frame.grid_remove()
+                uploaded_folder_label.grid_remove()
+                uploaded_folder_frame.grid_remove()
+                sheet_free_checkbox.grid_remove()
+                tiktok_label.grid_remove()
+                tiktok_entry.grid_remove()
+                source_folder_label.config(text='Uses shared videos + thumbnails folder from main GUI')
+                source_folder_label.grid(row=2, column=1, sticky='w', padx=8, pady=8)
+                return
             if source_type == "tiktok":
                 tiktok_label.grid(row=2, column=1, sticky='w', padx=(0, 8), pady=(8, 2))
                 tiktok_entry.grid(row=3, column=1, sticky='ew', padx=(0, 8), pady=(0, 8))
@@ -1986,7 +1996,7 @@ class TikTokYouTubeGUI:
                 messagebox.showerror("Error", "TikTok username is required for TikTok source")
                 return
 
-            if source_type == 'local_folder':
+            if source_type == 'local_folder' and not hasattr(self, 'source_var'):
                 if not channel_data['video_source_folder'] or not channel_data['video_uploaded_folder']:
                     messagebox.showerror("Error", "Both source and uploaded folder paths are required for Local Folder source")
                     return
@@ -2267,6 +2277,14 @@ class TikTokYouTubeGUI:
         # Show/hide fields based on source type
         def update_source_fields():
             source_type = source_type_var.get()
+            if hasattr(self, 'source_var') and source_type == 'local_folder':
+                source_folder_frame.grid_remove()
+                uploaded_folder_label.grid_remove()
+                uploaded_folder_frame.grid_remove()
+                sheet_free_checkbox.grid_remove()
+                source_folder_label.config(text='Uses shared videos + thumbnails folder from main GUI')
+                source_folder_label.grid(row=0, column=0, columnspan=2, sticky='w', padx=8, pady=8)
+                return
             if source_type == "local_folder":
                 source_folder_label.grid(row=0, column=0, sticky='w', padx=(0, 10), pady=(5, 2))
                 source_folder_frame.grid(row=1, column=0, sticky='ew', padx=(0, 10), pady=(0, 8))

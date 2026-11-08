@@ -65,3 +65,7 @@ Local workbook writes use a temporary XLSX plus atomic replacement. If Excel loc
 The dependency openpyxl is installed by setup, with existing compatible installations skipped. Keep both your workbook and library.sqlite3 when transferring this workflow to another PC.
 
 Setup also copies the tracked `templates/MultiUploader_Template.xlsx` into the main tool folder as `MultiUploader_Template.xlsx` on fresh installs. An existing workbook is always preserved. The root copy is private/ignored by Git; the clean template is included in every clone/download.
+
+### One shared media folder
+
+Select **Videos + thumbnails folder (shared by all channels)** in the main window and click **Save shared folder**. Both assets are matched by video_id within that folder. Add/Edit Channel no longer requires local source/uploaded paths in this shared-library app. Changing or adding a channel never overrides this folder. Old per-channel paths are ignored (a source may be imported once as an upgrade default if no shared folder was previously saved). Previously configured Uploaded/archive paths remain indexed for compatibility.
