@@ -60,7 +60,7 @@ class LibraryStore:
 
     def register(self, identity, name, policy='all', preferred_tab=None):
         import re
-        tab = 'Uploads - ' + re.sub(r'[\[\]:*?/\\]', '_', name)[:10].strip() + ' - ' + identity[-8:]
+        tab = re.sub(r'[\[\]:*?/\\]', '_', name)[:31].strip() or identity[-8:]
         if preferred_tab:
             if len(preferred_tab)>31 or re.search(r'[\[\]:*?/\\]',preferred_tab):
                 raise ValueError('Channel tab name must be valid in Excel and at most 31 characters')
