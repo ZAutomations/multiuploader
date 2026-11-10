@@ -265,7 +265,7 @@ class BroadcastGUI(TikTokYouTubeGUI):
                     answer=messagebox.askyesnocancel('New channel library', f"{c.get('channel_name',identity)}: upload existing library videos?\nYes: all existing and future videos.\nNo: only files first discovered after this library run.\nCancel: do not start.")
                     if answer is None:return
                     c['library_policy']='all' if answer else 'future'
-        self.review_pending()
+        # Channel workbook history is reconciled automatically in the worker.
         username = self.tiktok_var.get().strip().lstrip('@')
         excel_path=self.excel_var.get().strip() if self.tracking_mode.get()=='excel' else None
         if self.tracking_mode.get()=='excel' and not excel_path:

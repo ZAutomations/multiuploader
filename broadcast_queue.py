@@ -2,6 +2,7 @@
 import hashlib
 import json
 import random
+import re
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -75,6 +76,48 @@ class BroadcastQueue:
             self.upsert(ws,HEADERS,[info['video_id'],video.name,info['title'],info.get('caption',''),Path(info['thumbnail']).name if info.get('thumbnail') else '',result.get('youtube_url',''),result.get('youtube_id',''),result.get('upload_time',''),result.get('scheduled_time',''),status,thumb,result.get('thumbnail_error','') or (pending or {}).get('error','')])
         except Exception as e:
             self.log(f'Sheet sync pending for {channel.get("channel_name",identity)}: {e}. SQLite saved; uploads continue.')
+
+    def reconcile_channel_history(self, files, targets):
+        """Read each channel's existing rows BEFORE writing status/results back."""
+        self.skip_rows=set()
+        if not self.book:return
+        for identity,channel in targets.items():
+            tab=self.store.known(identity)[2]
+            try:
+                rows=read_rows(self.worksheet(tab,HEADERS))
+            except Exception as error:
+                raise ValueError(f'Cannot read upload history for {channel.get("channel_name",identity)}: {error}. No uploads started.') from error
+            for vid,video in files.items():
+                row=rows.get(video.stem)
+                if not row:continue
+                entry=self.state[vid]
+                status=str(row.get('status','')).strip().lower()
+                yt_id=str(row.get('youtube_id','')).strip()
+                url=str(row.get('yt_video_url','')).strip()
+                if not re.fullmatch(r'[A-Za-z0-9_-]{11}',yt_id):
+                    match=re.search(r'(?:[?&]v=|youtu\.be/)([A-Za-z0-9_-]{11})(?:[?&#/]|$)',url)
+                    yt_id=match.group(1) if match else ''
+                completed=status in ('uploaded','done','scheduled','success','completed') or status.startswith('done;')
+                if yt_id and (completed or row.get('upload_time') or url):
+                    result=entry['success'].setdefault(identity,{})
+                    result.update(youtube_id=yt_id,youtube_url=url or f'https://www.youtube.com/watch?v={yt_id}',
+                                  scheduled_time=row.get('schedual_time','') or result.get('scheduled_time',''),
+                                  upload_time=row.get('upload_time','') or result.get('upload_time',''))
+                    entry['pending'].pop(identity,None)
+                    self.log(f'Excel/Sheet history: already uploaded {video.stem} -> {channel.get("channel_name",identity)}')
+                elif status not in ('','pending','ready','uncertain'):
+                    # Original uploader skips non-empty status rows. Do not erase
+                    # their metadata or assume a completed upload is missing.
+                    self.skip_rows.add((vid,identity))
+                    self.log(f'Skipping {video.stem} for {channel.get("channel_name",identity)}: status={status}')
+        # Clear only failures which prove that the API rejected the request.
+        # Unknown network/interruption outcomes stay pending for safety, without a modal.
+        for entry in self.state.values():
+            for identity,pending in list(entry['pending'].items()):
+                error=pending.get('error','').lower()
+                if any(marker in error for marker in ('accessnotconfigured','has not been used in project','could not open youtube service','invalidtitle','invaliddescription','invalidtags','uploadlimitexceeded','quotaexceeded')):
+                    entry['pending'].pop(identity,None)
+        self.save()
 
     def schedule(self, identity):
         prior=[]
@@ -165,11 +208,12 @@ class BroadcastQueue:
             preferred=c.get('sheet_tab_name') if c.get('sheet_tab_name')==c.get('channel_name') else None
             self.store.register(identity,c.get('channel_name',identity),c.get('library_policy','all'),preferred_tab=preferred)
             self.log(f'Tracking tab for {c.get("channel_name",identity)}: {self.store.known(identity)[2]}')
+        self.reconcile_channel_history(files,targets)
         self.save()
         if ingest_only:
             for vid,video in files.items():
                 for identity,c in targets.items():
-                    if self.store.eligible(vid,identity):
+                    if self.store.eligible(vid,identity) and (vid,identity) not in self.skip_rows:
                         self.mirror(video,infos[vid],identity,c,self.state[vid]['success'].get(identity,{}),self.state[vid]['pending'].get(identity))
             self.log("Library indexed and Sheet sync attempted; upload phase skipped.")
             return
@@ -177,9 +221,9 @@ class BroadcastQueue:
         for vid,video in files.items():
             if self.stop.is_set(): break
             info=infos[vid];entry=self.state[vid]
-            active={i:c for i,c in targets.items() if self.store.eligible(vid,i)}
+            active={i:c for i,c in targets.items() if self.store.eligible(vid,i) and (vid,i) not in self.skip_rows}
             if not active: continue
-            needs_upload=any(i not in entry['success'] for i in active)
+            needs_upload=any(i not in entry['success'] and i not in entry['pending'] for i in active)
             if needs_upload and max_videos is not None and count>=max_videos: continue
             if needs_upload: count+=1
             self.log(f'LIBRARY: {video.name} -> {len(active)} selected channels')
@@ -190,7 +234,7 @@ class BroadcastQueue:
                 pending=entry['pending'].get(identity)
                 self.mirror(video,info,identity,c,result,pending)
                 if pending:
-                    self.log(f'Uncertain previous upload for {c.get("channel_name",identity)}; review required. Other destinations continue.')
+                    self.log(f'No confirmed result for {c.get("channel_name",identity)}; skipping this uncertain attempt and continuing to the next pending video.')
                     continue
                 if not result:
                     if self.backend.is_channel_in_quota_cooldown(c['channel_id']):

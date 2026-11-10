@@ -69,3 +69,7 @@ Setup also copies the tracked `templates/MultiUploader_Template.xlsx` into the m
 ### One shared media folder
 
 Select **Videos + thumbnails folder (shared by all channels)** in the main window and click **Save shared folder**. Both assets are matched by video_id within that folder. Add/Edit Channel no longer requires local source/uploaded paths in this shared-library app. Changing or adding a channel never overrides this folder. Old per-channel paths are ignored (a source may be imported once as an upgrade default if no shared folder was previously saved). Previously configured Uploaded/archive paths remain indexed for compatibility.
+
+## Automatic completed-video checks
+
+Before syncing or uploading, the queue reads the selected channel's tracking tab. A valid YouTube ID/link with completed metadata restores the matching SQLite success and clears its stale pending marker. Completed videos are skipped; blank/pending/ready rows are eligible. Other non-empty statuses (such as failed) are skipped, as in the original uploader. The automatic Check YouTube First popup is removed. An interrupted upload with no confirmed workbook/database result is logged and skipped while other pending videos proceed; it is never blindly uploaded again. Single mode counts videos actually eligible for upload, so an uncertain earlier row does not consume its one-video limit. Workbook history is read before writing mirrors back, preventing saved results from being overwritten with pending values.
