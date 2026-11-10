@@ -29,6 +29,7 @@ class BroadcastQueue:
         self.master = {}
         self.sheets = {}
         self.channel_schedules = {}
+        self.channel_rows = {}
 
     def save(self):
         # SQLite commits first. JSON is only a compatibility/recovery export.
@@ -73,8 +74,8 @@ class BroadcastQueue:
             tab = self.store.known(identity)[2]
             ws = self.worksheet(tab,HEADERS)
             thumb = 'set' if result.get('thumbnail_sha256') else ('pending' if info.get('thumbnail') else 'none')
-            status = 'uploaded' if result.get('youtube_id') else ('uncertain' if pending else 'pending')
-            self.upsert(ws,HEADERS,[info['video_id'],video.name,info['title'],info.get('caption',''),Path(info['thumbnail']).name if info.get('thumbnail') else '',result.get('youtube_url',''),result.get('youtube_id',''),result.get('upload_time',''),result.get('scheduled_time',''),status,thumb,result.get('thumbnail_error','') or (pending or {}).get('error','')])
+            status = 'done' if result.get('youtube_id') else ('uncertain' if pending else 'pending')
+            self.upsert(ws,HEADERS,[info['video_id'],video.name,info['title'],info.get('caption',''),Path(info['thumbnail']).name if info.get('thumbnail') else '',result.get('youtube_url',''),result.get('youtube_id',''),result.get('upload_time',''),result.get('scheduled_time') or (pending or {}).get('schedule') or self.channel_rows.get(identity,{}).get(info['video_id'],{}).get('schedual_time',''),status,thumb,result.get('thumbnail_error','') or (pending or {}).get('error','')])
         except Exception as e:
             self.log(f'Sheet sync pending for {channel.get("channel_name",identity)}: {e}. SQLite saved; uploads continue.')
 
@@ -88,10 +89,13 @@ class BroadcastQueue:
                 rows=read_rows(self.worksheet(tab,HEADERS))
             except Exception as error:
                 raise ValueError(f'Cannot read upload history for {channel.get("channel_name",identity)}: {error}. No uploads started.') from error
+            self.channel_rows[identity]=rows
             self.channel_schedules[identity]=[]
             # Read the whole schedule column, including videos absent from the
             # current disk library, just like the original uploader.
             for saved_row in rows.values():
+                saved_owner=self.store.video_owner(str(saved_row.get('youtube_id','')).strip())
+                if saved_owner and saved_owner!=identity:continue
                 try:
                     self.channel_schedules[identity].append(datetime.strptime(str(saved_row.get('schedual_time','')).strip(),FMT))
                 except ValueError:
@@ -106,6 +110,17 @@ class BroadcastQueue:
                 if not re.fullmatch(r'[A-Za-z0-9_-]{11}',yt_id):
                     match=re.search(r'(?:[?&]v=|youtu\.be/)([A-Za-z0-9_-]{11})(?:[?&#/]|$)',url)
                     yt_id=match.group(1) if match else ''
+                actual_owner=self.store.video_owner(yt_id) if yt_id else None
+                if actual_owner and actual_owner!=identity:
+                    row['schedual_time']=''
+                    existing=entry['success'].get(identity,{})
+                    if existing.get('youtube_id') and self.store.video_owner(existing['youtube_id'])==identity:
+                        entry['pending'].pop(identity,None)
+                    else:
+                        entry['success'].pop(identity,None)
+                        entry['pending'][identity]={'error':f'Confirmed wrong channel: {yt_id} belongs to {actual_owner}, not {identity}'}
+                    self.log(f'Rejected incorrect workbook history for {video.stem}: YouTube owner differs from selected channel')
+                    continue
                 completed=status in ('uploaded','done','scheduled','success','completed') or status.startswith('done;')
                 if yt_id and (completed or row.get('upload_time') or url):
                     result=entry['success'].setdefault(identity,{})
@@ -124,16 +139,26 @@ class BroadcastQueue:
         for entry in self.state.values():
             for identity,pending in list(entry['pending'].items()):
                 error=pending.get('error','').lower()
-                if any(marker in error for marker in ('accessnotconfigured','has not been used in project','could not open youtube service','invalidtitle','invaliddescription','invalidtags','uploadlimitexceeded','quotaexceeded')):
+                if any(marker in error for marker in ('accessnotconfigured','has not been used in project','could not open youtube service','invalidtitle','invaliddescription','invalidtags','uploadlimitexceeded','quotaexceeded','wrong youtube login','destination is configured','confirmed wrong channel')):
                     entry['pending'].pop(identity,None)
         self.save()
 
-    def schedule(self, identity):
+    def schedule(self, identity, requested=''):
+        # Original process_local_video/process_old_video reuse a row's existing
+        # scheduled_time verbatim. Only blank cells use automatic gap calculation.
+        if str(requested or '').strip():
+            value=str(requested).strip()
+            datetime.strptime(value,FMT)
+            self.log(f'Schedule {identity}: using existing row time {value}')
+            return value
         # Original rule: latest recorded schedule + random hour gap + minute
         # offset. Use now+the same gap only if that result is already past.
         prior=list(self.channel_schedules.get(identity,[]))
         for entry in self.state.values():
             value=entry.get('success',{}).get(identity,{}).get('scheduled_time','')
+            for alternate in entry.get('success',{}).get(identity,{}).get('alternate_uploads',[]):
+                try:prior.append(datetime.strptime(alternate.get('scheduled_time',''),FMT))
+                except ValueError:pass
             try: prior.append(datetime.strptime(value,FMT))
             except ValueError: pass
         now=datetime.now()
@@ -236,6 +261,13 @@ class BroadcastQueue:
             self.store.register(identity,c.get('channel_name',identity),c.get('library_policy','all'),preferred_tab=preferred)
             self.log(f'Tracking tab for {c.get("channel_name",identity)}: {self.store.known(identity)[2]}')
         self.reconcile_channel_history(files,targets)
+        # Original tool walks the selected channel worksheet top-to-bottom.
+        # For broadcasting, the first selected destination defines common order;
+        # videos absent from its tracker retain master/library order afterward.
+        first_identity=next(iter(targets))
+        tracker_order={video_id:i for i,video_id in enumerate(self.channel_rows.get(first_identity,{}))}
+        if tracker_order:
+            files=dict(sorted(files.items(),key=lambda item:tracker_order.get(item[1].stem,len(tracker_order))))
         self.save()
         if ingest_only:
             for vid,video in files.items():
@@ -244,6 +276,7 @@ class BroadcastQueue:
                         self.mirror(video,infos[vid],identity,c,self.state[vid]['success'].get(identity,{}),self.state[vid]['pending'].get(identity))
             self.log("Library indexed and Sheet sync attempted; upload phase skipped.")
             return
+        blocked_channels=set()
         count=0
         for vid,video in files.items():
             if self.stop.is_set(): break
@@ -257,6 +290,7 @@ class BroadcastQueue:
             data=None
             for identity,c in active.items():
                 if self.stop.is_set(): return
+                if identity in blocked_channels:continue
                 result=entry['success'].get(identity,{})
                 pending=entry['pending'].get(identity)
                 self.mirror(video,info,identity,c,result,pending)
@@ -268,14 +302,19 @@ class BroadcastQueue:
                         self.log(f'Quota cooldown: {c.get("channel_name",identity)}; other destinations continue')
                         continue
                     if data is None:data=video.read_bytes()
-                    schedule=self.schedule(identity)
+                    requested=self.channel_rows.get(identity,{}).get(video.stem,{}).get('schedual_time','')
+                    schedule=self.schedule(identity,requested)
                     entry['pending'][identity]={'started':datetime.now().isoformat(),'schedule':schedule}
                     self.save()
                     result=self.backend.upload_to_youtube(c,data,info,schedule)
                     if not result or not result.get('youtube_id'):
                         entry['pending'][identity]['error']=getattr(self.backend,'last_upload_error','Upload not confirmed')
+                        if 'wrong youtube login' in entry['pending'][identity]['error'].lower():
+                            blocked_channels.add(identity)
+                            self.log(f'Channel {c.get("channel_name",identity)} blocked for this run: wrong authenticated channel')
                         self.save();self.mirror(video,info,identity,c,{},entry['pending'][identity]);continue
                     result=dict(result,scheduled_time=schedule,upload_time=datetime.now().strftime(FMT))
+                    self.store.set_video_owner(result['youtube_id'],identity)
                     entry['success'][identity]=result;entry['pending'].pop(identity,None);self.save()
                     self.mirror(video,info,identity,c,result)
                     self.log(f'Uploaded to {c.get("channel_name",identity)}: {result["youtube_url"]}')

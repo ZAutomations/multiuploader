@@ -620,6 +620,13 @@ class TikTokYouTubeGUI:
             self.log(f"❌ Save config failed: {e}", 'error')
 
     def save_channels(self):
+        # OAuth tokens must never be shared between destination channels.
+        seen_tokens = set()
+        for key, channel in self.channels_config.items():
+            token = channel.get('token_file', '')
+            if not token or token == 'token_mychannel' or token in seen_tokens:
+                channel['token_file'] = 'token_' + (channel.get('youtube_channel_id') or key)
+            seen_tokens.add(channel['token_file'])
         """Save ONLY channels configuration"""
         try:
             with open(self.channels_file, 'w', encoding='utf-8') as f:

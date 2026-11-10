@@ -459,9 +459,24 @@ class TikTokYouTubeUploader:
 
                     print(f"✅ Token saved: {token_file.name}")
 
-            return build('youtube', 'v3', credentials=creds)
+            youtube = build('youtube', 'v3', credentials=creds)
+            expected = str(channel_config.get('youtube_channel_id','')).strip()
+            if not expected:
+                self.last_auth_error = 'YouTube Channel ID is required; upload blocked until the destination is configured.'
+                print(self.last_auth_error)
+                return None
+            owned = youtube.channels().list(part='id,snippet', mine=True).execute(num_retries=3).get('items', [])
+            if len(owned) != 1 or owned[0].get('id') != expected:
+                actual = ', '.join(f"{item.get('snippet',{}).get('title','')} ({item.get('id','')})" for item in owned) or 'no accessible channel'
+                self.last_auth_error = f"Wrong YouTube login: expected {channel_config.get('channel_name','')} ({expected}), authenticated as {actual}. Re-authenticate the correct channel. Upload blocked."
+                print(self.last_auth_error)
+                return None
+            self.last_auth_error = ''
+            print(f"Verified destination channel: {owned[0]['snippet']['title']} ({expected})")
+            return youtube
 
         except Exception as e:
+            self.last_auth_error = str(e)
             print(f"❌ YouTube service error: {e}{Colors.RESET}")
             return None
 
@@ -1393,8 +1408,8 @@ class TikTokYouTubeUploader:
             youtube = self.get_youtube_service(channel_config)
             if not youtube:
                 self.last_upload_error = (
-                    f"Could not open YouTube service for {channel_config.get('channel_name', channel_config.get('channel_id', 'channel'))}; "
-                    "check the matching OAuth client file and credentials folder."
+                    getattr(self, 'last_auth_error', '') or
+                    f"Could not open YouTube service for {channel_config.get('channel_name', channel_config.get('channel_id', 'channel'))}; check credentials."
                 )
                 return None
 

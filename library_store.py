@@ -14,6 +14,7 @@ class LibraryStore:
             CREATE TABLE IF NOT EXISTS videos (id TEXT PRIMARY KEY, filename TEXT, path TEXT DEFAULT '', added REAL, metadata TEXT DEFAULT '{}');
             CREATE TABLE IF NOT EXISTS uploads (video TEXT, channel TEXT, status TEXT, payload TEXT, PRIMARY KEY(video, channel));
             CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, name TEXT, policy TEXT, cutoff REAL, tab TEXT);
+            CREATE TABLE IF NOT EXISTS youtube_owners (id TEXT PRIMARY KEY, channel TEXT);
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
             ''')
             migrated = db.execute("SELECT 1 FROM settings WHERE key='legacy_imported'").fetchone()
@@ -47,6 +48,7 @@ class LibraryStore:
                 db.execute('DELETE FROM uploads WHERE video=?', (vid,))
                 for status, section in [('success','success'),('pending','pending')]:
                     for ch, payload in entry.get(section,{}).items():
+                        if status=='pending' and ch in entry.get('success',{}):continue
                         db.execute('INSERT INTO uploads VALUES (?,?,?,?)', (vid,ch,status,json.dumps(payload)))
 
     def add_video(self, vid, path, metadata):
@@ -90,3 +92,12 @@ class LibraryStore:
         with self.connect() as db:
             row = db.execute('SELECT metadata FROM videos WHERE id=?',(vid,)).fetchone()
         return json.loads(row[0]) if row else {}
+
+    def video_owner(self, youtube_id):
+        with self.connect() as db:
+            row=db.execute('SELECT channel FROM youtube_owners WHERE id=?',(youtube_id,)).fetchone()
+        return row[0] if row else None
+
+    def set_video_owner(self, youtube_id, channel):
+        with self.connect() as db:
+            db.execute('INSERT OR REPLACE INTO youtube_owners VALUES (?,?)',(youtube_id,channel))
