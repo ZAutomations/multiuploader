@@ -381,6 +381,6 @@ if __name__ == '__main__':
         raise SystemExit('This uploader is already open. Use the existing window.')
     root = tk.Tk()
     app = BroadcastGUI(root)
-    root.title('Multi-channel Video Uploader - Video First')
+    root.title('Single Video Multichannel Uploader')
     root.protocol('WM_DELETE_WINDOW', app.close_window)
     root.mainloop()

@@ -377,7 +377,7 @@ class ChannelSelectionDialog:
 class TikTokYouTubeGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("TikTok → YouTube Auto Uploader - Professional Edition")
+        self.root.title("Single Video Multichannel Uploader")
         self.root.geometry("1600x1000")
 
         # Colors matching original design
@@ -699,7 +699,7 @@ class TikTokYouTubeGUI:
         header.pack_propagate(False)
 
         tk.Label(
-            header, text="🎬 TikTok → YouTube Auto Uploader",
+            header, text="🎬 Single Video Multichannel Uploader",
             font=('Arial', 20, 'bold'), bg=self.header_bg, fg='white'
         ).pack(side=tk.LEFT, padx=30, pady=20)
 
