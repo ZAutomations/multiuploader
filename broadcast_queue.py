@@ -28,6 +28,7 @@ class BroadcastQueue:
         self.book = None
         self.master = {}
         self.sheets = {}
+        self.channel_schedules = {}
 
     def save(self):
         # SQLite commits first. JSON is only a compatibility/recovery export.
@@ -87,6 +88,14 @@ class BroadcastQueue:
                 rows=read_rows(self.worksheet(tab,HEADERS))
             except Exception as error:
                 raise ValueError(f'Cannot read upload history for {channel.get("channel_name",identity)}: {error}. No uploads started.') from error
+            self.channel_schedules[identity]=[]
+            # Read the whole schedule column, including videos absent from the
+            # current disk library, just like the original uploader.
+            for saved_row in rows.values():
+                try:
+                    self.channel_schedules[identity].append(datetime.strptime(str(saved_row.get('schedual_time','')).strip(),FMT))
+                except ValueError:
+                    pass
             for vid,video in files.items():
                 row=rows.get(video.stem)
                 if not row:continue
@@ -120,15 +129,30 @@ class BroadcastQueue:
         self.save()
 
     def schedule(self, identity):
-        prior=[]
+        # Original rule: latest recorded schedule + random hour gap + minute
+        # offset. Use now+the same gap only if that result is already past.
+        prior=list(self.channel_schedules.get(identity,[]))
         for entry in self.state.values():
             value=entry.get('success',{}).get(identity,{}).get('scheduled_time','')
             try: prior.append(datetime.strptime(value,FMT))
             except ValueError: pass
         now=datetime.now()
-        last=max([now]+prior)
-        gap=max(1,random.uniform(float(self.backend.schedule_gap_min_hours),float(self.backend.schedule_gap_max_hours))*60+random.randint(-int(self.backend.schedule_gap_random_minutes),int(self.backend.schedule_gap_random_minutes)))
-        return max(now+timedelta(minutes=30),last+timedelta(minutes=gap)).strftime(FMT)
+        last=max(prior) if prior else now
+        min_hours=float(self.backend.schedule_gap_min_hours)
+        max_hours=float(self.backend.schedule_gap_max_hours)
+        jitter=int(self.backend.schedule_gap_random_minutes)
+        if min_hours<0 or max_hours<min_hours or jitter<0:
+            raise ValueError('Invalid scheduling gap settings')
+        hours=random.uniform(min_hours,max_hours)
+        minutes=random.randint(-jitter,jitter)
+        gap=timedelta(hours=hours,minutes=minutes)
+        if gap.total_seconds()<=0:
+            raise ValueError('Scheduling gap must be positive; reduce the random minute offset')
+        next_time=last+gap
+        if next_time<now:
+            next_time=now+gap
+        self.log(f'Schedule {identity}: last={last.strftime(FMT)}, gap={hours:.2f}h {minutes:+d}m, next={next_time.strftime(FMT)}')
+        return next_time.strftime(FMT)
 
     def run(self, source, uploaded, channels, delay=0, use_sheets=False, metadata=None, max_videos=None, ingest_only=False, excel_path=None):
         source, uploaded=Path(source).resolve(),Path(uploaded).resolve()
@@ -181,6 +205,9 @@ class BroadcastQueue:
                 self.log(f'Sheets unavailable; local metadata and SQLite tracking active: {e}')
         elif use_sheets:
             self.log('Sheets disconnected; SQLite tracking active. Sync will retry next run.')
+        if self.master:
+            order={video_id:i for i,video_id in enumerate(self.master)}
+            files=dict(sorted(files.items(),key=lambda item:order.get(item[1].stem,len(order))))
         infos={}
         for vid,video in files.items():
             info={'video_id':video.stem,'title':video.stem,'caption':''}
