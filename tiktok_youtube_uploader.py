@@ -1443,14 +1443,9 @@ class TikTokYouTubeUploader:
             print(f"  🌍 Local time: {schedule_dt.strftime('%d-%b-%Y %I:%M %p')}")
             print(f"  🌐 UTC time: {schedule_dt_utc.strftime('%d-%b-%Y %I:%M %p')} (offset: {utc_offset_hours:+.1f}h)")
 
-            # Get tags from channel config or use defaults
-            default_tags = channel_config.get('default_tags', '')
-            if default_tags and isinstance(default_tags, str):
-                # Parse comma-separated tags and clean them
-                tags = [tag.strip() for tag in default_tags.split(',') if tag.strip()]
-            else:
-                # Fallback to default tags
-                tags = ['shorts', 'tiktok']
+            from video_tags import upload_tags
+            tags = upload_tags(video_info, channel_config)
+            print(f'  Keyword tags: {len(tags)} (video metadata first, channel defaults if blank)')
 
             # Prepare request
             body = {
@@ -1505,7 +1500,8 @@ class TikTokYouTubeUploader:
                 'youtube_id': video_id,
                 'youtube_url': youtube_url,
                 'formatted_title': formatted_title,
-                'formatted_description': formatted_description
+                'formatted_description': formatted_description,
+                'tags': tags
             }
 
             print(f"  ✅ Uploaded successfully!")

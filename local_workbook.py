@@ -41,6 +41,9 @@ class LocalWorkbook:
             wb.close()
             if temp and os.path.exists(temp):os.unlink(temp)
 
+    def worksheet_titles(self):
+        return self.operation(lambda wb:list(wb.sheetnames))
+
     def worksheet(self,title):
         if not self.operation(lambda wb:title in wb.sheetnames):raise WorksheetNotFound(title)
         return LocalWorksheet(self,title)

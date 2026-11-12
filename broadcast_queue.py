@@ -11,13 +11,14 @@ from library_store import LibraryStore
 EXTENSIONS = {'.mp4','.mov','.avi','.mkv','.flv','.webm','.m4v'}
 FMT = '%d-%b-%Y %I:%M %p'
 HEADERS = ['video_id','filename','title','description','thumbnail','yt_video_url','youtube_id','upload_time','schedual_time','status','thumbnail_status','error']
-MASTER_HEADERS = ['video_id','filename','title','description','thumbnail','source_url']
+MASTER_HEADERS = ['video_id','filename','title','description','thumbnail','source_url','tags']
 
 def read_rows(ws):
     rows = ws.get_all_values()
     if not rows:
         return {}
-    return {r[0]: dict(zip(rows[0], r)) for r in rows[1:] if r and r[0]}
+    headers=[str(h).strip().lower() for h in rows[0]]
+    return {str(r[0]).strip(): dict(zip(headers, r)) for r in rows[1:] if r and r[0]}
 
 class BroadcastQueue:
     def __init__(self, backend, state_file, log=print, stop=None):
@@ -57,13 +58,54 @@ class BroadcastQueue:
         self.sheets[title] = ws
         return ws
 
+    def master_worksheet(self):
+        from gspread.exceptions import WorksheetNotFound
+        try:
+            ws=self.book.worksheet('Videos')
+        except WorksheetNotFound:
+            names=self.book.worksheet_titles() if hasattr(self.book,'worksheet_titles') else [s.title for s in self.book.worksheets()]
+            candidates=[]
+            for name in names:
+                candidate=self.book.worksheet(name)
+                rows=candidate.get_all_values()
+                keys=[str(h).strip().lower() for h in rows[0]] if rows else []
+                if all(h in keys for h in ('video_id','title','description')) and 'youtube_id' not in keys:
+                    candidates.append(candidate)
+            if len(candidates)>1:
+                raise ValueError('Multiple metadata tabs found; rename the intended one Videos')
+            ws=candidates[0] if candidates else self.book.add_worksheet(title='Videos',rows=1000,cols=12)
+        rows=ws.get_all_values()
+        if not rows:
+            ws.append_row(MASTER_HEADERS,value_input_option='RAW');rows=[MASTER_HEADERS]
+        self.master_headers=rows[0]
+        keys=[str(h).strip().lower() for h in self.master_headers]
+        if len(set(keys))!=len(keys) or not all(h in keys for h in ('video_id','title','description')) or keys[0]!='video_id':
+            raise ValueError('Metadata headers need unique video_id (first column), title, description; Tags is optional')
+        self.master_ws=ws
+        self.log(f'Metadata tab: {ws.title}; per-video tags: {"enabled" if "tags" in keys else "channel defaults"}')
+        return ws
+
+    def master_values(self,video,info,old):
+        fields=dict(old or {})
+        fields.update(video_id=video.stem,filename=video.name,title=info['title'],description=info.get('caption',''),
+                      thumbnail=Path(info['thumbnail']).name if info.get('thumbnail') else '',
+                      source_url=fields.get('source_url') or info.get('tiktok_url',''),tags=info.get('tags',''))
+        return [fields.get(str(h).strip().lower(),'') for h in self.master_headers]
+
+    @staticmethod
+    def column_name(number):
+        result=''
+        while number:
+            number,remainder=divmod(number-1,26);result=chr(65+remainder)+result
+        return result
+
     def upsert(self, ws, headers, values):
         rows = ws.get_all_values()
         matches = [n for n,r in enumerate(rows[1:],2) if r and r[0] == values[0]]
         if len(matches)>1:
             raise ValueError(f'Duplicate video ID in {ws.title}: {values[0]}')
         if matches:
-            ws.batch_update([{'range': f'A{matches[0]}:L{matches[0]}' if len(headers)==12 else f'A{matches[0]}:F{matches[0]}', 'values':[values]}],value_input_option='RAW')
+            ws.batch_update([{'range': f'A{matches[0]}:{self.column_name(len(headers))}{matches[0]}', 'values':[values]}],value_input_option='RAW')
         else:
             ws.append_row(values,value_input_option='RAW')
 
@@ -207,7 +249,7 @@ class BroadcastQueue:
             from local_workbook import LocalWorkbook
             try:
                 self.book=LocalWorkbook(excel_path)
-                ws=self.worksheet('Videos',MASTER_HEADERS)
+                ws=self.master_worksheet()
                 self.master=read_rows(ws)
                 self.log(f'Local Excel tracking: {Path(excel_path).resolve()}')
             except Exception as e:
@@ -216,7 +258,7 @@ class BroadcastQueue:
         elif use_sheets and self.backend.sheets_client:
             try:
                 self.book=self.backend.sheets_client.open_by_key(self.backend.spreadsheet_id)
-                ws=self.worksheet('Videos',MASTER_HEADERS)
+                ws=self.master_worksheet()
                 self.master=read_rows(ws)
                 for tab in {c.get('sheet_tab_name','') for c in channels.values()}:
                     if not tab or tab=='Videos':continue
@@ -240,7 +282,7 @@ class BroadcastQueue:
             info.update(legacy_metadata.get(video.stem,{}));info.update((metadata or {}).get(video.name,{}))
             info['video_id']=video.stem
             master=self.master.get(video.stem)
-            if master: info.update(title=master.get('title') or video.stem,caption=master.get('description',''))
+            if master: info.update(title=master.get('title') or video.stem,caption=master.get('description',''),tags=master.get('tags',''))
             # video_id is the common filename stem for both assets.
             # Sheet filename/thumbnail cells are generated output, never lookup inputs.
             images=[p for p in video.parent.iterdir() if p.is_file() and p.stem.casefold()==video.stem.casefold() and p.suffix.lower() in ('.png','.jpg','.jpeg')]
@@ -251,7 +293,7 @@ class BroadcastQueue:
             # filename is optional user input: resolve from video_id/file stem,
             # then fill the real detected filename in the master sheet.
             if self.book and (not master or master.get('filename','') != video.name or master.get('thumbnail','') != (Path(info['thumbnail']).name if info['thumbnail'] else '')):
-                try: self.upsert(self.worksheet('Videos',MASTER_HEADERS),MASTER_HEADERS,[video.stem,video.name,info['title'],info['caption'],Path(info['thumbnail']).name if info['thumbnail'] else '',(master or {}).get('source_url') or info.get('tiktok_url','')])
+                try: self.upsert(self.master_ws,self.master_headers,self.master_values(video,info,master))
                 except Exception as e:self.log(f'Master Videos sync pending: {e}')
         # Register AFTER discovery so 'future' excludes the existing library.
         for identity,c in targets.items():
